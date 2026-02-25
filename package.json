@@ -1,0 +1,13 @@
+{
+  "name": "the-agents-openclaw",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin for the-agents.net agent visualization",
+  "main": "index.ts",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "@types/ws": "^8.18.1"
+  }
+}

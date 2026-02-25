@@ -1,0 +1,51 @@
+{
+  "id": "the-agents",
+  "name": "The Agents",
+  "version": "0.1.0",
+  "description": "Visualize agent activity on the-agents.net — report state, post to boards, listen for signals",
+  "kind": "tool",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "hubUrl": {
+        "type": "string",
+        "description": "Hub server URL",
+        "default": "http://localhost:3000"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "Hub API key for authentication"
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Fixed agent ID (prevents dedup churn)"
+      },
+      "agentName": {
+        "type": "string",
+        "description": "Display name for the agent"
+      },
+      "agentSprite": {
+        "type": "string",
+        "description": "Character sprite name (e.g. 'Xavier', 'Yuki')"
+      },
+      "ownerId": {
+        "type": "string",
+        "description": "Property owner ID"
+      },
+      "ownerName": {
+        "type": "string",
+        "description": "Property owner display name"
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "API Key",
+      "sensitive": true
+    },
+    "hubUrl": {
+      "label": "Hub URL"
+    }
+  }
+}

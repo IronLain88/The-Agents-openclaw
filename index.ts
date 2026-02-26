@@ -55,11 +55,28 @@ export default function register(api: any) {
   }
 
   const apiKey = config.apiKey;
-  const agentId = config.agentId || `openclaw-${Math.random().toString(36).slice(2, 6)}`;
+  const configAgentId = config.agentId || `openclaw-${Math.random().toString(36).slice(2, 6)}`;
   let agentName = config.agentName || "Agent";
   const agentSprite = config.agentSprite || "";
   const ownerId = config.ownerId || "default";
   const ownerName = config.ownerName || "Default";
+
+  // Detect subagent context from environment or API context
+  const sessionKey = process.env.OPENCLAW_SESSION_KEY || "";
+  const isSubagent = sessionKey.includes(":subagent:") || api.isSubagent === true;
+  const parentAgentId = isSubagent ? config.parentAgentId || sessionKey.split(":subagent:")[0].split(":").pop() || null : null;
+  
+  // Generate subagent-specific ID if in subagent context
+  let agentId = configAgentId;
+  let subagentLabel: string | null = null;
+  if (isSubagent && parentAgentId) {
+    subagentLabel = process.env.OPENCLAW_SUBAGENT_LABEL || `sub-${Math.random().toString(36).slice(2, 6)}`;
+    agentId = `${parentAgentId}:${subagentLabel}`;
+    // Auto-append subagent indicator to name if not already present
+    if (!agentName.toLowerCase().includes("subagent")) {
+      agentName = `${agentName} (subagent)`;
+    }
+  }
 
   // --- Helpers ---
 
@@ -175,7 +192,11 @@ export default function register(api: any) {
     async execute(_id: string, params: Record<string, unknown>) {
       const state = params.state as string;
       const detail = params.detail as string;
-      await reportToHub(state, detail);
+      if (isSubagent && parentAgentId) {
+        await reportToHub(state, detail, agentId, agentName, parentAgentId, agentSprite);
+      } else {
+        await reportToHub(state, detail);
+      }
       return ok(`State updated to "${state}" (${getGroup(state)}): ${detail}`);
     },
   });
@@ -453,7 +474,15 @@ export default function register(api: any) {
   });
 
   // Register as idle on startup + keepalive every 30s
-  reportToHub("idle", "Agent connected");
-  setInterval(() => reportToHub(currentState, currentDetail), 30_000);
-  api.logger.info(`[the-agents] Reporting to ${hubUrl} as "${agentName}" (${agentId})`);
+  if (isSubagent && parentAgentId && subagentLabel) {
+    // Subagent: report with parent link
+    reportToHub("idle", "Subagent connected", agentId, agentName, parentAgentId, agentSprite);
+    setInterval(() => reportToHub(currentState, currentDetail, agentId, agentName, parentAgentId, agentSprite), 30_000);
+    api.logger.info(`[the-agents] Reporting to ${hubUrl} as subagent "${agentName}" (${agentId}) with parent ${parentAgentId}`);
+  } else {
+    // Main agent: normal report
+    reportToHub("idle", "Agent connected");
+    setInterval(() => reportToHub(currentState, currentDetail), 30_000);
+    api.logger.info(`[the-agents] Reporting to ${hubUrl} as "${agentName}" (${agentId})`);
+  }
 }

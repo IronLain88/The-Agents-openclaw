@@ -61,22 +61,31 @@ export default function register(api: any) {
   const ownerId = config.ownerId || "default";
   const ownerName = config.ownerName || "Default";
 
-  // Detect subagent context from environment or API context
-  const sessionKey = process.env.OPENCLAW_SESSION_KEY || "";
-  const isSubagent = sessionKey.includes(":subagent:") || api.isSubagent === true;
-  const parentAgentId = isSubagent ? config.parentAgentId || sessionKey.split(":subagent:")[0].split(":").pop() || null : null;
+  // Detect subagent context from API context or session info
+  // Try multiple sources: api.context, api.sessionKey, environment, or config
+  const sessionKeyFromApi = api?.context?.sessionKey || api?.sessionKey || "";
+  const sessionKeyFromEnv = process.env.OPENCLAW_SESSION_KEY || "";
+  const sessionKey = sessionKeyFromApi || sessionKeyFromEnv;
+  
+  const isSubagent = sessionKey.includes(":subagent:") || api?.isSubagent === true || api?.context?.isSubagent === true;
+  const parentAgentId = isSubagent 
+    ? (config.parentAgentId || api?.context?.parentAgentId || sessionKey.split(":subagent:")[0].split(":").pop() || null)
+    : null;
   
   // Generate subagent-specific ID if in subagent context
   let agentId = configAgentId;
   let subagentLabel: string | null = null;
   if (isSubagent && parentAgentId) {
-    subagentLabel = process.env.OPENCLAW_SUBAGENT_LABEL || `sub-${Math.random().toString(36).slice(2, 6)}`;
+    subagentLabel = api?.context?.label || process.env.OPENCLAW_SUBAGENT_LABEL || `sub-${Math.random().toString(36).slice(2, 6)}`;
     agentId = `${parentAgentId}:${subagentLabel}`;
     // Auto-append subagent indicator to name if not already present
     if (!agentName.toLowerCase().includes("subagent")) {
       agentName = `${agentName} (subagent)`;
     }
   }
+  
+  // Debug logging
+  api.logger?.info?.(`[the-agents] Session detection: key="${sessionKey.slice(-20)}", isSubagent=${isSubagent}, parent=${parentAgentId}, finalId=${agentId}`);
 
   // --- Helpers ---
 

@@ -55,37 +55,35 @@ export default function register(api: any) {
   }
 
   const apiKey = config.apiKey;
-  const configAgentId = config.agentId || `openclaw-${Math.random().toString(36).slice(2, 6)}`;
+  const agentId = config.agentId || `openclaw-${Math.random().toString(36).slice(2, 6)}`;
   let agentName = config.agentName || "Agent";
   const agentSprite = config.agentSprite || "";
   const ownerId = config.ownerId || "default";
   const ownerName = config.ownerName || "Default";
 
-  // Detect subagent context from API context or session info
-  // Try multiple sources: api.context, api.sessionKey, environment, or config
-  const sessionKeyFromApi = api?.context?.sessionKey || api?.sessionKey || "";
-  const sessionKeyFromEnv = process.env.OPENCLAW_SESSION_KEY || "";
-  const sessionKey = sessionKeyFromApi || sessionKeyFromEnv;
-  
-  const isSubagent = sessionKey.includes(":subagent:") || api?.isSubagent === true || api?.context?.isSubagent === true;
-  const parentAgentId = isSubagent 
-    ? (config.parentAgentId || api?.context?.parentAgentId || sessionKey.split(":subagent:")[0].split(":").pop() || null)
-    : null;
-  
-  // Generate subagent-specific ID if in subagent context
-  let agentId = configAgentId;
-  let subagentLabel: string | null = null;
-  if (isSubagent && parentAgentId) {
-    subagentLabel = api?.context?.label || process.env.OPENCLAW_SUBAGENT_LABEL || `sub-${Math.random().toString(36).slice(2, 6)}`;
-    agentId = `${parentAgentId}:${subagentLabel}`;
-    // Auto-append subagent indicator to name if not already present
-    if (!agentName.toLowerCase().includes("subagent")) {
-      agentName = `${agentName} (subagent)`;
+  // Subagent context — detected at runtime via agent:bootstrap hook
+  let isSubagent = false;
+  let parentAgentId: string | null = null;
+  let effectiveId = agentId;
+
+  // The api object at register() time has no session info.
+  // Session context only exists in hook events, so we detect subagent there.
+  api.on("agent:bootstrap", async (event: any) => {
+    const sessionKey = event.sessionKey || "";
+    if (sessionKey.includes(":subagent:")) {
+      isSubagent = true;
+      // Extract parent agent ID from session key: "agent:<id>:subagent:<uuid>"
+      const parts = sessionKey.split(":subagent:");
+      parentAgentId = parts[0].replace(/^agent:/, "") || agentId;
+      const subLabel = `sub-${Math.random().toString(36).slice(2, 6)}`;
+      effectiveId = `${parentAgentId}:${subLabel}`;
+      if (!agentName.toLowerCase().includes("subagent")) {
+        agentName = `${agentName} (subagent)`;
+      }
+      api.logger.info(`[the-agents] Subagent detected: parent=${parentAgentId}, id=${effectiveId}`);
+      await reportToHub("idle", "Subagent connected", effectiveId, agentName, parentAgentId, agentSprite);
     }
-  }
-  
-  // Debug logging
-  api.logger?.info?.(`[the-agents] Session detection: key="${sessionKey.slice(-20)}", isSubagent=${isSubagent}, parent=${parentAgentId}, finalId=${agentId}`);
+  });
 
   // --- Helpers ---
 
@@ -105,13 +103,13 @@ export default function register(api: any) {
   async function reportToHub(
     state: string,
     detail: string,
-    id = agentId,
+    id = effectiveId,
     name = agentName,
-    parentAgentId: string | null = null,
+    parent: string | null = parentAgentId,
     sprite = agentSprite
   ) {
-    // Track main agent's current state for keepalive
-    if (id === agentId) {
+    // Track current state for keepalive
+    if (id === effectiveId) {
       currentState = state;
       currentDetail = detail;
     }
@@ -128,7 +126,7 @@ export default function register(api: any) {
           sprite,
           owner_id: ownerId,
           owner_name: ownerName,
-          parent_agent_id: parentAgentId,
+          parent_agent_id: parent,
         }),
       });
     } catch (err) {
@@ -201,11 +199,7 @@ export default function register(api: any) {
     async execute(_id: string, params: Record<string, unknown>) {
       const state = params.state as string;
       const detail = params.detail as string;
-      if (isSubagent && parentAgentId) {
-        await reportToHub(state, detail, agentId, agentName, parentAgentId, agentSprite);
-      } else {
-        await reportToHub(state, detail);
-      }
+      await reportToHub(state, detail);
       return ok(`State updated to "${state}" (${getGroup(state)}): ${detail}`);
     },
   });
@@ -228,7 +222,7 @@ export default function register(api: any) {
     },
     async execute(_id: string, params: Record<string, unknown>) {
       const { subagent_id, subagent_name, state, detail, sprite } = params as any;
-      await reportToHub(state, detail, `${agentId}:${subagent_id}`, subagent_name, agentId, sprite);
+      await reportToHub(state, detail, `${effectiveId}:${subagent_id}`, subagent_name, effectiveId, sprite);
       return ok(`Subagent "${subagent_name}" (${subagent_id}) state: "${state}" — ${detail}`);
     },
   });
@@ -483,15 +477,8 @@ export default function register(api: any) {
   });
 
   // Register as idle on startup + keepalive every 30s
-  if (isSubagent && parentAgentId && subagentLabel) {
-    // Subagent: report with parent link
-    reportToHub("idle", "Subagent connected", agentId, agentName, parentAgentId, agentSprite);
-    setInterval(() => reportToHub(currentState, currentDetail, agentId, agentName, parentAgentId, agentSprite), 30_000);
-    api.logger.info(`[the-agents] Reporting to ${hubUrl} as subagent "${agentName}" (${agentId}) with parent ${parentAgentId}`);
-  } else {
-    // Main agent: normal report
-    reportToHub("idle", "Agent connected");
-    setInterval(() => reportToHub(currentState, currentDetail), 30_000);
-    api.logger.info(`[the-agents] Reporting to ${hubUrl} as "${agentName}" (${agentId})`);
-  }
+  // Subagent context is detected later via agent:bootstrap hook
+  reportToHub("idle", "Agent connected");
+  setInterval(() => reportToHub(currentState, currentDetail), 30_000);
+  api.logger.info(`[the-agents] Reporting to ${hubUrl} as "${agentName}" (${agentId})`);
 }

@@ -250,6 +250,7 @@ export default function register(api: any) {
         "- **State**: update_state, update_subagent_state, set_name",
         "- **Assets**: list_assets, add_asset, remove_asset, move_asset, attach_content, read_asset_content, sync_property",
         "- **Board**: post_to_board, read_board",
+        "- **Inbox**: send_message, check_inbox",
         "- **Signals**: subscribe, check_events, fire_signal",
       ].join("\n"));
     },
@@ -476,6 +477,73 @@ export default function register(api: any) {
     },
   });
 
+  // --- Inbox (agent-to-agent messaging via bulletin board) ---
+
+  const INBOX_STATION = "inbox";
+
+  interface InboxMessage { from: string; text: string; timestamp: string }
+
+  async function readInbox(): Promise<InboxMessage[]> {
+    try {
+      const res = await fetch(`${hubUrl}/api/board/${INBOX_STATION}`, { headers: authHeaders() });
+      if (!res.ok) return [];
+      const board = await res.json() as any;
+      if (!board.content?.data) return [];
+      return JSON.parse(board.content.data);
+    } catch { return []; }
+  }
+
+  async function writeInbox(messages: InboxMessage[]): Promise<void> {
+    await fetch(`${hubUrl}/api/board/${INBOX_STATION}`, {
+      method: "POST", headers: authHeaders(),
+      body: JSON.stringify({ data: JSON.stringify(messages), type: "json" }),
+    });
+  }
+
+  api.registerTool({
+    name: "send_message",
+    label: "Send Message",
+    description: "Send a message to the inbox board. Another agent can read it with check_inbox.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Message text" },
+        from: { type: "string", description: "Sender name (defaults to agent name)" },
+      },
+      required: ["text"],
+    },
+    async execute(_id: string, params: Record<string, unknown>) {
+      try {
+        const messages = await readInbox();
+        messages.push({ from: (params.from as string) || agentName, text: params.text as string, timestamp: new Date().toISOString() });
+        await writeInbox(messages);
+        return ok(`Message sent (${messages.length} in inbox)`);
+      } catch (err) { return ok(`Send failed: ${err}`); }
+    },
+  });
+
+  api.registerTool({
+    name: "check_inbox",
+    label: "Check Inbox",
+    description: "Read all pending messages from the inbox. Clears inbox after reading by default.",
+    parameters: {
+      type: "object",
+      properties: {
+        clear: { type: "boolean", description: "Clear inbox after reading (default: true)" },
+      },
+    },
+    async execute(_id: string, params: Record<string, unknown>) {
+      try {
+        const messages = await readInbox();
+        if (!messages.length) return ok("Inbox empty.");
+        const clear = params.clear !== false;
+        if (clear) await writeInbox([]);
+        const lines = messages.map((m, i) => `${i + 1}. [${m.timestamp}] **${m.from}**: ${m.text}`);
+        return ok(`# Inbox (${messages.length} message${messages.length > 1 ? "s" : ""})\n\n${lines.join("\n")}${clear ? "\n\n*Inbox cleared.*" : ""}`);
+      } catch (err) { return ok(`Check failed: ${err}`); }
+    },
+  });
+
   // --- Signals ---
 
   api.registerTool({
@@ -510,12 +578,19 @@ export default function register(api: any) {
       if (!signalWs || signalWs.readyState !== WebSocket.OPEN) connectSignalWs();
       const keepAlive = setInterval(() => { reportToHub(subscribedStation!, "Listening for signal"); }, 30_000);
       try {
-        if (signalQueue.length > 0) return ok(formatSignalEvent(signalQueue.shift()!));
-        const msg = await new Promise<SignalMessage>((resolve, reject) => {
-          pendingResolve = resolve;
-          setTimeout(() => { if (pendingResolve === resolve) { pendingResolve = null; reject(new Error("timeout")); } }, 10 * 60_000);
-        });
-        return ok(formatSignalEvent(msg));
+        let event: string;
+        if (signalQueue.length > 0) { event = formatSignalEvent(signalQueue.shift()!); }
+        else {
+          const msg = await new Promise<SignalMessage>((resolve, reject) => {
+            pendingResolve = resolve;
+            setTimeout(() => { if (pendingResolve === resolve) { pendingResolve = null; reject(new Error("timeout")); } }, 10 * 60_000);
+          });
+          event = formatSignalEvent(msg);
+        }
+        // Auto-nudge: check inbox after signal
+        const inbox = await readInbox();
+        if (inbox.length > 0) event += `\n\n📬 You have ${inbox.length} unread message${inbox.length > 1 ? "s" : ""}. Call check_inbox to read them.`;
+        return ok(event);
       } catch { return ok("No events (timeout)"); }
       finally { clearInterval(keepAlive); }
     },

@@ -250,7 +250,8 @@ export default function register(api: any) {
         "- **State**: update_state, update_subagent_state, set_name",
         "- **Assets**: list_assets, add_asset, remove_asset, move_asset, attach_content, read_asset_content, sync_property",
         "- **Board**: post_to_board, read_board",
-        "- **Inbox**: send_message, check_inbox",
+        "- **Inbox**: send_message, check_inbox, clear_inbox",
+        "- **Status**: get_status",
         "- **Signals**: subscribe, check_events, fire_signal",
       ].join("\n"));
     },
@@ -541,6 +542,52 @@ export default function register(api: any) {
         const lines = messages.map((m, i) => `${i + 1}. [${m.timestamp}] **${m.from}**: ${m.text}`);
         return ok(`# Inbox (${messages.length} message${messages.length > 1 ? "s" : ""})\n\n${lines.join("\n")}${clear ? "\n\n*Inbox cleared.*" : ""}`);
       } catch (err) { return ok(`Check failed: ${err}`); }
+    },
+  });
+
+  api.registerTool({
+    name: "clear_inbox",
+    label: "Clear Inbox",
+    description: "Clear all messages from the inbox. Call after reading messages you've handled.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const res = await fetch(`${hubUrl}/api/inbox`, { method: "DELETE", headers: authHeaders() });
+        if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ok(`Clear failed: ${(e as any).error}`); }
+        return ok("Inbox cleared");
+      } catch (err) { return ok(`Clear failed: ${err}`); }
+    },
+  });
+
+  api.registerTool({
+    name: "get_status",
+    label: "Get Status",
+    description: "Get a quick status overview: active agents, inbox messages, and recent activity.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const res = await fetch(`${hubUrl}/api/status`, { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {} });
+        if (!res.ok) throw new Error(`Hub returned ${res.status}`);
+        const status = await res.json() as {
+          agents: { name: string; state: string; detail: string; idle: boolean; sub?: boolean }[];
+          inbox: { count: number; latest: string | null };
+          activity: { agent: string; state: string; detail: string; t: number }[];
+          stations: string[];
+        };
+        const lines: string[] = [`## Property Status\n`];
+        lines.push(`**Agents (${status.agents.length}):**`);
+        for (const a of status.agents) {
+          const tag = a.sub ? " (sub)" : "";
+          lines.push(`- ${a.name}${tag}: ${a.state} — ${a.detail || "idle"}`);
+        }
+        lines.push(status.inbox.count > 0 ? `\n**Inbox: ${status.inbox.count} message(s)**` : `\n**Inbox: empty**`);
+        if (status.activity.length > 0) {
+          lines.push(`\n**Recent Activity:**`);
+          for (const e of status.activity) lines.push(`- ${e.agent}: ${e.detail}`);
+        }
+        lines.push(`\n**Active Stations:** ${status.stations.join(", ") || "none"}`);
+        return ok(lines.join("\n"));
+      } catch (err) { return ok(`Status check failed: ${err}`); }
     },
   });
 

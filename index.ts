@@ -532,13 +532,11 @@ export default function register(api: any) {
 
   // --- Inbox (agent-to-agent messaging via bulletin board) ---
 
-  const INBOX_STATION = "inbox";
-
   interface InboxMessage { from: string; text: string; timestamp: string }
 
-  async function readInbox(): Promise<InboxMessage[]> {
+  async function readInbox(name = "inbox"): Promise<InboxMessage[]> {
     try {
-      const res = await fetch(`${hubUrl}/api/board/${INBOX_STATION}`, { headers: authHeaders() });
+      const res = await fetch(`${hubUrl}/api/board/${encodeURIComponent(name)}`, { headers: authHeaders() });
       if (!res.ok) return [];
       const board = await res.json() as any;
       if (!board.content?.data) return [];
@@ -546,31 +544,28 @@ export default function register(api: any) {
     } catch { return []; }
   }
 
-  async function writeInbox(messages: InboxMessage[]): Promise<void> {
-    await fetch(`${hubUrl}/api/board/${INBOX_STATION}`, {
-      method: "POST", headers: authHeaders(),
-      body: JSON.stringify({ data: JSON.stringify(messages), type: "json" }),
-    });
-  }
-
   api.registerTool({
     name: "send_message",
     label: "Send Message",
-    description: "Send a message to the inbox board. Another agent can read it with check_inbox.",
+    description: "Send a message to an inbox. Your agent name is used as the sender.",
     parameters: {
       type: "object",
       properties: {
         text: { type: "string", description: "Message text" },
-        from: { type: "string", description: "Sender name (defaults to agent name)" },
+        inbox: { type: "string", description: 'Target inbox name (default: "inbox"). Use for named inboxes like "inbox-bugs".' },
       },
       required: ["text"],
     },
     async execute(_id: string, params: Record<string, unknown>) {
+      const target = (params.inbox as string) || "inbox";
       try {
-        const messages = await readInbox();
-        messages.push({ from: (params.from as string) || agentName, text: params.text as string, timestamp: new Date().toISOString() });
-        await writeInbox(messages);
-        return ok(`Message sent (${messages.length} in inbox)`);
+        const res = await fetch(`${hubUrl}/api/inbox/${encodeURIComponent(target)}`, {
+          method: "POST", headers: authHeaders(),
+          body: JSON.stringify({ from: agentName, text: params.text }),
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ok(`Send failed: ${(e as any).error}`); }
+        const { count } = await res.json() as { count: number };
+        return ok(`Message sent to ${target} (${count} total)`);
       } catch (err) { return ok(`Send failed: ${err}`); }
     },
   });
@@ -579,12 +574,18 @@ export default function register(api: any) {
     name: "check_inbox",
     label: "Check Inbox",
     description: "Check your inbox for messages from humans or other agents. Returns formatted messages with sender, time, and text.",
-    parameters: { type: "object", properties: {} },
-    async execute() {
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: 'Inbox name (default: "inbox"). Use for named inboxes like "inbox-bugs".' },
+      },
+    },
+    async execute(_id: string, params: Record<string, unknown>) {
+      const inbox = (params.name as string) || "inbox";
       try {
-        const messages = await readInbox();
-        await reportToHub("inbox", "Checking inbox");
-        if (!messages.length) return ok("Inbox is empty.");
+        const messages = await readInbox(inbox);
+        await reportToHub(inbox, "Checking inbox");
+        if (!messages.length) return ok(`${inbox} is empty.`);
         const lines = messages.map(m => {
           const time = m.timestamp
             ? new Date(m.timestamp).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
@@ -600,12 +601,18 @@ export default function register(api: any) {
     name: "clear_inbox",
     label: "Clear Inbox",
     description: "Clear all messages from the inbox. Call after reading messages you've handled.",
-    parameters: { type: "object", properties: {} },
-    async execute() {
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: 'Inbox name to clear (default: "inbox").' },
+      },
+    },
+    async execute(_id: string, params: Record<string, unknown>) {
+      const target = (params.name as string) || "inbox";
       try {
-        const res = await fetch(`${hubUrl}/api/inbox`, { method: "DELETE", headers: authHeaders() });
+        const res = await fetch(`${hubUrl}/api/inbox/${encodeURIComponent(target)}`, { method: "DELETE", headers: authHeaders() });
         if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ok(`Clear failed: ${(e as any).error}`); }
-        return ok("Inbox cleared");
+        return ok(`${target} cleared`);
       } catch (err) { return ok(`Clear failed: ${err}`); }
     },
   });

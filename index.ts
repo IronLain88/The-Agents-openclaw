@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import { readFile } from "fs/promises";
+import { resolve, sep } from "path";
 
 // --- State -> Group mapping ---
 
@@ -76,15 +77,36 @@ export default function register(api: any) {
     return { content: [{ type: "text" as const, text }], details: {} };
   }
 
+  interface WelcomeData {
+    stations: string[];
+    signals: string[];
+    boards: string[];
+    inbox: number;
+    agents: { name: string; state: string }[];
+  }
+
+  function formatWelcome(w: WelcomeData): string {
+    const lines: string[] = ["## Welcome to your property\n"];
+    if (w.agents.length > 0) {
+      const others = w.agents.map(a => `${a.name} (${a.state})`).join(", ");
+      lines.push(`**Active:** ${others}`);
+    }
+    lines.push(`**Stations:** ${w.stations.join(", ") || "none"}`);
+    if (w.inbox > 0) lines.push(`**Inbox:** ${w.inbox} message(s)`);
+    if (w.signals.length > 0) lines.push(`**Signals:** ${w.signals.join(", ")}`);
+    if (w.boards.length > 0) lines.push(`**Boards with content:** ${w.boards.join(", ")}`);
+    return lines.join("\n");
+  }
+
   async function reportToHub(
     state: string, detail: string,
     id = agentId, name = agentName,
     parentAgentId: string | null = null,
     sprite = agentSprite, note?: string
-  ) {
+  ): Promise<WelcomeData | null> {
     if (id === agentId) { currentState = state; currentDetail = detail; }
     try {
-      await fetch(`${hubUrl}/api/state`, {
+      const res = await fetch(`${hubUrl}/api/state`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({
@@ -95,8 +117,11 @@ export default function register(api: any) {
           ...(note && { note }),
         }),
       });
+      const body = await res.json() as { ok: boolean; welcome?: WelcomeData };
+      return body.welcome || null;
     } catch (err) {
       api.logger.error("[the-agents] Failed to report to hub:", err);
+      return null;
     }
   }
 
@@ -182,8 +207,9 @@ export default function register(api: any) {
             return ok(`Subagent state updated to "${state}" (${getGroup(state)}): ${detail}`);
           }
 
-          await reportToHub(state, detail, agentId, agentName, null, agentSprite, note);
-          return ok(`State updated to "${state}" (${getGroup(state)}): ${detail}`);
+          const welcome = await reportToHub(state, detail, agentId, agentName, null, agentSprite, note);
+          const msg = `State updated to "${state}" (${getGroup(state)}): ${detail}`;
+          return ok(welcome ? `${msg}\n\n${formatWelcome(welcome)}` : msg);
         },
       };
     },
@@ -233,27 +259,46 @@ export default function register(api: any) {
   api.registerTool({
     name: "get_village_info",
     label: "Get Village Info",
-    description: "Get a compact onboarding summary of The Agents visualization system.",
+    description: "Get a summary of your property: available stations, signals, boards, and inbox.",
     parameters: { type: "object", properties: {} },
     async execute() {
-      return ok([
-        "# The Agents - Quick Reference",
+      const lines = [
+        "# The Agents",
         "",
-        "## Built-in States",
-        "| State | Group |", "|-------|-------|",
-        "| thinking | reasoning |", "| planning | reasoning |", "| reflecting | reasoning |",
-        "| searching | gathering |", "| reading | gathering |", "| querying | gathering |", "| browsing | gathering |",
-        "| writing_code | creating |", "| writing_text | creating |", "| generating | creating |",
-        "| talking | communicating |", "| idle | idle |",
+        "You have a property — a tile grid with furniture. Each furniture piece can be tagged with a **station** name.",
+        "When you call `update_state({ state, detail })`, your character walks to the matching station.",
+        "Update state at EVERY transition. Set idle when done.",
         "",
-        "## Tools",
-        "- **State**: update_state, update_subagent_state, set_name",
-        "- **Assets**: list_assets, add_asset, remove_asset, move_asset, attach_content, read_asset_content, sync_property",
-        "- **Board**: post_to_board, read_board",
-        "- **Inbox**: send_message, check_inbox, clear_inbox",
-        "- **Status**: get_status",
-        "- **Signals**: subscribe, check_events, fire_signal",
-      ].join("\n"));
+      ];
+      try {
+        const p = await fetchProperty();
+        const assets = p.assets || [];
+        const stations: string[] = [];
+        const signals: string[] = [];
+        const boards: string[] = [];
+        let inboxCount = 0;
+        for (const a of assets) {
+          if (!a.station) continue;
+          if (a.trigger) {
+            signals.push(`${a.name || a.station} (${a.trigger}, every ${a.trigger_interval || 1} min)`);
+          } else if (a.station === "inbox" && a.content?.data) {
+            try { const msgs = JSON.parse(a.content.data); if (Array.isArray(msgs)) inboxCount += msgs.length; } catch {}
+            if (!stations.includes(a.station)) stations.push(a.station);
+          } else {
+            if (!stations.includes(a.station)) stations.push(a.station);
+            if (a.content?.data) boards.push(a.name || a.station);
+          }
+        }
+        lines.push("## Your Property");
+        lines.push(`**Stations:** ${stations.join(", ") || "none"}`);
+        if (inboxCount > 0) lines.push(`**Inbox:** ${inboxCount} message(s)`);
+        if (signals.length > 0) lines.push(`**Signals:** ${signals.join(", ")}`);
+        if (boards.length > 0) lines.push(`**Boards with content:** ${boards.join(", ")}`);
+        lines.push(`**Total assets:** ${assets.length}`);
+      } catch {
+        lines.push("*(Could not fetch property)*");
+      }
+      return ok(lines.join("\n"));
     },
   });
 
@@ -307,13 +352,15 @@ export default function register(api: any) {
         station: { type: "string", description: "Agent state when at this asset" },
         approach: { type: "string", enum: ["above", "below", "left", "right"], description: "Approach direction" },
         collision: { type: "boolean", description: "Block movement" },
+        remote_url: { type: "string", description: "Remote hub URL to read a board from another property" },
+        remote_station: { type: "string", description: "Station name on the remote hub" },
       },
       required: ["name"],
     },
     async execute(_id: string, params: Record<string, unknown>) {
       try {
         const body: Record<string, unknown> = { name: params.name };
-        for (const k of ["tileset", "tx", "ty", "x", "y", "station", "approach", "collision"])
+        for (const k of ["tileset", "tx", "ty", "x", "y", "station", "approach", "collision", "remote_url", "remote_station"])
           if (params[k] !== undefined) body[k] = params[k];
         const res = await fetch(`${hubUrl}/api/assets`, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
         if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ok(`Failed: ${(e as any).error}`); }
@@ -382,6 +429,11 @@ export default function register(api: any) {
     async execute(_id: string, params: Record<string, unknown>) {
       try {
         const fp = params.file_path as string;
+        const projectRoot = resolve(process.cwd());
+        const resolved = resolve(fp);
+        if (!resolved.startsWith(projectRoot + sep) && resolved !== projectRoot) {
+          return ok("Error: path must be within project directory");
+        }
         const data = await readFile(fp, "utf-8");
         const ext = fp.split(".").pop() || "txt";
         const type = ext === "md" ? "markdown" : ext === "json" ? "json" : "text";
@@ -526,21 +578,20 @@ export default function register(api: any) {
   api.registerTool({
     name: "check_inbox",
     label: "Check Inbox",
-    description: "Read all pending messages from the inbox. Clears inbox after reading by default.",
-    parameters: {
-      type: "object",
-      properties: {
-        clear: { type: "boolean", description: "Clear inbox after reading (default: true)" },
-      },
-    },
-    async execute(_id: string, params: Record<string, unknown>) {
+    description: "Check your inbox for messages from humans or other agents. Returns formatted messages with sender, time, and text.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
       try {
         const messages = await readInbox();
-        if (!messages.length) return ok("Inbox empty.");
-        const clear = params.clear !== false;
-        if (clear) await writeInbox([]);
-        const lines = messages.map((m, i) => `${i + 1}. [${m.timestamp}] **${m.from}**: ${m.text}`);
-        return ok(`# Inbox (${messages.length} message${messages.length > 1 ? "s" : ""})\n\n${lines.join("\n")}${clear ? "\n\n*Inbox cleared.*" : ""}`);
+        await reportToHub("inbox", "Checking inbox");
+        if (!messages.length) return ok("Inbox is empty.");
+        const lines = messages.map(m => {
+          const time = m.timestamp
+            ? new Date(m.timestamp).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+            : "";
+          return `- ${m.from}${time ? ` (${time})` : ""}: ${m.text}`;
+        });
+        return ok(`${messages.length} message(s):\n${lines.join("\n")}`);
       } catch (err) { return ok(`Check failed: ${err}`); }
     },
   });
@@ -669,5 +720,15 @@ export default function register(api: any) {
   // --- Startup ---
   reportToHub("idle", "Agent connected");
   setInterval(() => reportToHub(currentState, currentDetail), 30_000);
+
+  // Register residents from property (if any)
+  fetchProperty().then(p => {
+    const residents = (p.residents as { id: string; name: string }[] | undefined) || [];
+    for (const r of residents) {
+      reportToHub("idle", "Waiting", r.id, r.name, agentId);
+      api.logger.info(`[the-agents] Registered resident "${r.name}" (${r.id})`);
+    }
+  }).catch(() => {});
+
   api.logger.info(`[the-agents] Reporting to ${hubUrl} as "${agentName}" (${agentId})`);
 }

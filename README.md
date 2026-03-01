@@ -1,17 +1,21 @@
 # The Agents — OpenClaw Plugin
 
+*Because even your open-source agent deserves a little pixel house*
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-OpenClaw plugin that connects your agents to [The Agents Hub](https://github.com/IronLain88/The-Agents-Hub). Your agent appears as a pixel character walking between stations on a tile-based property.
+OpenClaw plugin that connects your agents to [The Agents Hub](https://github.com/IronLain88/The-Agents-Hub). Your agent appears as a pixel character walking between stations on a tile-based property. Same vibe coder energy, different runtime.
 
-**Auto-detects subagents** — the first session is the main agent, any additional sessions automatically spawn as subagent characters.
+**Auto-detects subagents** — the first session is the main agent, any additional sessions automatically spawn as subagent characters. It's like watching your agents reproduce. You didn't ask for this.
+
+**Vibe-safe** — defaults to port 4242. We would never block port 3000. That's *your* port. For your React app. The one you'll finish someday.
 
 ## Quick Start
 
 ### 1. Start the hub
 
 ```bash
-docker run -p 3000:3000 theagents/hub
+docker run -p 4242:4242 zer0liquid/the-agents-hub:latest
 ```
 
 ### 2. Install the plugin
@@ -35,7 +39,7 @@ Add to your `openclaw.json` plugins section:
       "the-agents": {
         "enabled": true,
         "config": {
-          "hubUrl": "http://localhost:3000",
+          "hubUrl": "http://localhost:4242",
           "agentName": "MyAgent",
           "agentSprite": "Yuki",
           "ownerId": "my-property",
@@ -49,13 +53,13 @@ Add to your `openclaw.json` plugins section:
 
 ### 4. Open the viewer
 
-Go to **http://localhost:3000/viewer/** and watch your agent work.
+Go to **http://localhost:4242/viewer/** and watch your agent work.
 
 ## Plugin Config
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `hubUrl` | `http://localhost:3000` | Hub server URL |
+| `hubUrl` | `http://localhost:4242` | Hub server URL |
 | `apiKey` | *(none)* | Hub API key for authenticated endpoints |
 | `agentId` | auto-generated | Fixed agent ID (prevents dedup churn) |
 | `agentName` | `Agent` | Display name on the property |
@@ -79,7 +83,16 @@ All the same tools as the MCP server — full feature parity:
 
 ## Subagent Auto-Detection
 
-Unlike the MCP server, this plugin automatically detects multi-session setups. The first session to call `update_state` becomes the main agent. Any subsequent sessions are treated as subagents and rendered as smaller characters linked to the parent — no need to explicitly call `update_subagent_state`.
+Unlike the MCP server, this plugin automatically detects multi-session setups. The first session to call `update_state` becomes the main agent. Any subsequent sessions are treated as subagents and rendered as smaller characters linked to the parent — no need to explicitly call `update_subagent_state`. They just show up, like interns on the first day.
+
+## I Know You Didn't Read Any of That
+
+Just tell your agent:
+
+```
+Install the-agents OpenClaw plugin so I can watch you work as a pixel character.
+The hub is at http://localhost:4242. Figure it out. MAKE NO MISTAKE.
+```
 
 ## License
 

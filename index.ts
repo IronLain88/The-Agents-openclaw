@@ -44,7 +44,7 @@ interface SignalMessage {
 
 export default function register(api: any) {
   const config = (api.pluginConfig || {}) as Record<string, string | undefined>;
-  const hubUrl = config.hubUrl || "http://localhost:3000";
+  const hubUrl = config.hubUrl || "http://localhost:4242";
 
   try {
     const parsed = new URL(hubUrl);

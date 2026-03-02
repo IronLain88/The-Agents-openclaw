@@ -95,8 +95,9 @@ export default function register(api: any) {
     lines.push(`**Stations:** ${w.stations.join(", ") || "none"}`);
     if (w.inbox > 0) lines.push(`**Inbox:** ${w.inbox} message(s)`);
     if (w.tasks?.length > 0) {
-      lines.push(`**Tasks:** ${w.tasks.join(", ")}`);
-      lines.push(`*To work on a task: subscribe({name}) → check_events() → do the work → answer_task({station, result})*`);
+      lines.push(`**Task stations (interactive — visitors trigger these, you do the work):**`);
+      for (const t of w.tasks) lines.push(`  - ${t}`);
+      lines.push(`*Workflow: subscribe({name}) → check_events() (blocks until triggered) → do the work → answer_task({station, result}) → check_events() again*`);
     }
     if (w.signals.length > 0) lines.push(`**Signals:** ${w.signals.join(", ")}`);
     if (w.boards.length > 0) lines.push(`**Boards with content:** ${w.boards.join(", ")}`);
@@ -303,8 +304,9 @@ export default function register(api: any) {
         lines.push(`**Stations:** ${stations.join(", ") || "none"}`);
         if (inboxCount > 0) lines.push(`**Inbox:** ${inboxCount} message(s)`);
         if (tasks.length > 0) {
-          lines.push(`**Tasks:** ${tasks.join(", ")}`);
-          lines.push(`*To work on a task: subscribe({name}) → check_events() → do the work → answer_task({station, result})*`);
+          lines.push(`**Task stations (interactive — visitors trigger these, you do the work):**`);
+          for (const t of tasks) lines.push(`  - ${t}`);
+          lines.push(`*Workflow: subscribe({name}) → check_events() (blocks until triggered) → do the work → answer_task({station, result}) → check_events() again*`);
         }
         if (signals.length > 0) lines.push(`**Signals:** ${signals.join(", ")}`);
         if (boards.length > 0) lines.push(`**Boards with content:** ${boards.join(", ")}`);

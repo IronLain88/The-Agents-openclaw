@@ -297,7 +297,10 @@ export default function register(api: any) {
         lines.push("## Your Property");
         lines.push(`**Stations:** ${stations.join(", ") || "none"}`);
         if (inboxCount > 0) lines.push(`**Inbox:** ${inboxCount} message(s)`);
-        if (tasks.length > 0) lines.push(`**Tasks:** ${tasks.join(", ")}`);
+        if (tasks.length > 0) {
+          lines.push(`**Tasks:** ${tasks.join(", ")}`);
+          lines.push(`*To work on a task: subscribe({name}) → check_events() → do the work → answer_task({station, result})*`);
+        }
         if (signals.length > 0) lines.push(`**Signals:** ${signals.join(", ")}`);
         if (boards.length > 0) lines.push(`**Boards with content:** ${boards.join(", ")}`);
         lines.push(`**Total assets:** ${assets.length}`);
@@ -660,7 +663,7 @@ export default function register(api: any) {
   api.registerTool({
     name: "subscribe",
     label: "Subscribe to Signal",
-    description: "Subscribe to a signal asset on the property",
+    description: "Subscribe to a signal or task station. For tasks: subscribe → check_events (returns instructions) → do work → answer_task.",
     parameters: {
       type: "object",
       properties: { name: { type: "string", description: "Signal station name" } },
@@ -682,7 +685,7 @@ export default function register(api: any) {
   api.registerTool({
     name: "check_events",
     label: "Check Events",
-    description: "Block until subscribed signal fires (up to 10 min timeout)",
+    description: "Wait for the next event on your subscribed station (up to 10 min). For tasks, the event payload contains {station, instructions, prompt} telling you what to do.",
     parameters: { type: "object", properties: {} },
     async execute() {
       if (!subscribedStation) return ok("Not subscribed. Call subscribe first.");
@@ -788,7 +791,7 @@ export default function register(api: any) {
   api.registerTool({
     name: "read_task",
     label: "Read Task",
-    description: "Read a task station's instructions and current status.",
+    description: "Read a task station's instructions and current status. Use get_village_info to discover available tasks first.",
     parameters: {
       type: "object",
       properties: { station: { type: "string", description: "Task station name" } },
@@ -816,7 +819,7 @@ export default function register(api: any) {
   api.registerTool({
     name: "answer_task",
     label: "Answer Task",
-    description: "Post an HTML result to a pending task station.",
+    description: "Post your result (HTML) to a task station after completing the work from check_events.",
     parameters: {
       type: "object",
       properties: {

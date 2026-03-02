@@ -1,7 +1,7 @@
 {
   "id": "the-agents",
   "name": "The Agents",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Visualize agent activity on the-agents.net — report state, post to boards, listen for signals",
   "kind": "tool",
   "configSchema": {
@@ -16,13 +16,9 @@
         "type": "string",
         "description": "Hub API key for authentication"
       },
-      "agentId": {
-        "type": "string",
-        "description": "Fixed agent ID (prevents dedup churn)"
-      },
       "agentName": {
         "type": "string",
-        "description": "Display name for the agent"
+        "description": "Display name for the agent (single-agent mode)"
       },
       "agentSprite": {
         "type": "string",
@@ -35,6 +31,17 @@
       "ownerName": {
         "type": "string",
         "description": "Property owner display name"
+      },
+      "agents": {
+        "type": "object",
+        "description": "Per-agent identity map for multi-agent setups. Keys are OpenClaw agent IDs, values have name and sprite.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "sprite": { "type": "string" }
+          }
+        }
       }
     },
     "additionalProperties": false

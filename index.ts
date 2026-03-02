@@ -695,8 +695,8 @@ export default function register(api: any) {
         // Auto-nudge: check inbox after signal
         const inbox = await readInbox();
         if (inbox.length > 0) event += `\n\n📬 You have ${inbox.length} unread message${inbox.length > 1 ? "s" : ""}. Call check_inbox to read them.`;
-        return ok(event);
-      } catch { return ok("No events (timeout)"); }
+        return ok(event + "\n\nRemember to call update_state for your next activity.");
+      } catch { return ok("No events (timeout). Remember to call update_state for your next activity."); }
       finally { clearInterval(keepAlive); }
     },
   });

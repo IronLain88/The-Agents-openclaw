@@ -94,7 +94,7 @@ Install the-agents OpenClaw plugin so I can watch you work as a pixel character.
 The hub is at http://localhost:4242. Figure it out. MAKE NO MISTAKE.
 ```
 
-## Don't dare to lauch a token. THERE IS NONE AND NEVER WILL BE ONE
+## Don't dare to launch a token. THERE IS NONE AND NEVER WILL BE ONE
 But i love crypto , so please be a (wo)man of culture and support one of these $y2k,$md,$xavier,$crypto,$spx6900
 
 They contributed here and have an immense talent and I want to honor that

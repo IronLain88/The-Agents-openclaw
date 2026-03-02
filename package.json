@@ -1,8 +1,25 @@
 {
   "name": "the-agents-openclaw",
-  "version": "0.1.0",
-  "description": "OpenClaw plugin for the-agents.net agent visualization",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin for The Agents — real-time AI agent visualization",
   "main": "index.ts",
+  "openclaw": {
+    "extensions": {
+      "the-agents": "index.ts"
+    }
+  },
+  "keywords": ["openclaw", "openclaw-plugin", "ai-agents", "visualization"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IronLain88/The-Agents-openclaw"
+  },
+  "files": [
+    "index.ts",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "ws": "^8.18.0"
   },

@@ -81,6 +81,7 @@ export default function register(api: any) {
     stations: string[];
     signals: string[];
     boards: string[];
+    tasks: string[];
     inbox: number;
     agents: { name: string; state: string }[];
   }
@@ -93,6 +94,10 @@ export default function register(api: any) {
     }
     lines.push(`**Stations:** ${w.stations.join(", ") || "none"}`);
     if (w.inbox > 0) lines.push(`**Inbox:** ${w.inbox} message(s)`);
+    if (w.tasks?.length > 0) {
+      lines.push(`**Tasks:** ${w.tasks.join(", ")}`);
+      lines.push(`*To work on a task: subscribe({name}) → check_events() → do the work → answer_task({station, result})*`);
+    }
     if (w.signals.length > 0) lines.push(`**Signals:** ${w.signals.join(", ")}`);
     if (w.boards.length > 0) lines.push(`**Boards with content:** ${w.boards.join(", ")}`);
     return lines.join("\n");

@@ -275,10 +275,15 @@ export default function register(api: any) {
         const assets = p.assets || [];
         const stations: string[] = [];
         const signals: string[] = [];
+        const tasks: string[] = [];
         const boards: string[] = [];
         let inboxCount = 0;
         for (const a of assets) {
           if (!a.station) continue;
+          if ((a as any).task) {
+            tasks.push(`${a.station} — ${(a as any).instructions || "(no instructions)"}`);
+            continue;
+          }
           if (a.trigger) {
             signals.push(`${a.name || a.station} (${a.trigger}, every ${a.trigger_interval || 1} min)`);
           } else if (a.station === "inbox" && a.content?.data) {
@@ -292,6 +297,7 @@ export default function register(api: any) {
         lines.push("## Your Property");
         lines.push(`**Stations:** ${stations.join(", ") || "none"}`);
         if (inboxCount > 0) lines.push(`**Inbox:** ${inboxCount} message(s)`);
+        if (tasks.length > 0) lines.push(`**Tasks:** ${tasks.join(", ")}`);
         if (signals.length > 0) lines.push(`**Signals:** ${signals.join(", ")}`);
         if (boards.length > 0) lines.push(`**Boards with content:** ${boards.join(", ")}`);
         lines.push(`**Total assets:** ${assets.length}`);
@@ -721,6 +727,112 @@ export default function register(api: any) {
         if (!res.ok) return ok(`Fire failed: ${res.statusText}`);
         return ok(`Fired signal "${params.name}"`);
       } catch (err) { return ok(`Fire failed: ${err}`); }
+    },
+  });
+
+  // --- Reception ---
+
+  api.registerTool({
+    name: "read_reception",
+    label: "Read Reception",
+    description: "Read a reception station's private instructions and current Q&A state.",
+    parameters: {
+      type: "object",
+      properties: { station: { type: "string", description: "Reception station name" } },
+      required: ["station"],
+    },
+    async execute(_id: string, params: Record<string, unknown>) {
+      try {
+        const p = await fetchProperty();
+        const asset = (p.assets || []).find((a: any) => a.station === params.station && a.reception);
+        if (!asset) return ok(`No reception station "${params.station}" found`);
+        const parts: string[] = [`# Reception: ${params.station}\n`];
+        const instructions = (asset as any).instructions;
+        if (instructions) parts.push(`## Instructions\n${instructions}\n`);
+        let state = { status: "idle", question: null as string | null, answer: null as string | null };
+        try { if (asset.content?.data) state = JSON.parse(asset.content.data); } catch {}
+        parts.push(`## Status: ${state.status}`);
+        if (state.status === "pending" && state.question) parts.push(`\n## Question\n${state.question}`);
+        else if (state.status === "answered") { parts.push(`\nQuestion: ${state.question}`); parts.push("Answer already posted."); }
+        else parts.push("\nNo pending questions. Subscribe and wait for visitors.");
+        return ok(parts.join("\n"));
+      } catch (err) { return ok(`Failed: ${err}`); }
+    },
+  });
+
+  api.registerTool({
+    name: "answer_reception",
+    label: "Answer Reception",
+    description: "Post an HTML answer to a pending reception question.",
+    parameters: {
+      type: "object",
+      properties: {
+        station: { type: "string", description: "Reception station name" },
+        answer: { type: "string", description: "HTML answer to display" },
+      },
+      required: ["station", "answer"],
+    },
+    async execute(_id: string, params: Record<string, unknown>) {
+      try {
+        const res = await fetch(`${hubUrl}/api/reception/${encodeURIComponent(params.station as string)}/answer`, {
+          method: "POST", headers: authHeaders(), body: JSON.stringify({ answer: params.answer }),
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ok(`Answer failed: ${(e as any).error}`); }
+        return ok(`Answer posted to "${params.station}"`);
+      } catch (err) { return ok(`Answer failed: ${err}`); }
+    },
+  });
+
+  // --- Task ---
+
+  api.registerTool({
+    name: "read_task",
+    label: "Read Task",
+    description: "Read a task station's instructions and current status.",
+    parameters: {
+      type: "object",
+      properties: { station: { type: "string", description: "Task station name" } },
+      required: ["station"],
+    },
+    async execute(_id: string, params: Record<string, unknown>) {
+      try {
+        const p = await fetchProperty();
+        const asset = (p.assets || []).find((a: any) => a.station === params.station && a.task);
+        if (!asset) return ok(`No task station "${params.station}" found`);
+        const parts: string[] = [`# Task: ${params.station}\n`];
+        const instructions = (asset as any).instructions;
+        if (instructions) parts.push(`## Instructions\n${instructions}\n`);
+        let state = { status: "idle", result: null as string | null };
+        try { if (asset.content?.data) state = JSON.parse(asset.content.data); } catch {}
+        parts.push(`## Status: ${state.status}`);
+        if (state.status === "pending") parts.push("\nTask is running.");
+        else if (state.status === "done") parts.push("\nResult already posted.");
+        else parts.push("\nIdle. Subscribe and wait for a visitor to click Run.");
+        return ok(parts.join("\n"));
+      } catch (err) { return ok(`Failed: ${err}`); }
+    },
+  });
+
+  api.registerTool({
+    name: "answer_task",
+    label: "Answer Task",
+    description: "Post an HTML result to a pending task station.",
+    parameters: {
+      type: "object",
+      properties: {
+        station: { type: "string", description: "Task station name" },
+        result: { type: "string", description: "HTML result to display" },
+      },
+      required: ["station", "result"],
+    },
+    async execute(_id: string, params: Record<string, unknown>) {
+      try {
+        const res = await fetch(`${hubUrl}/api/task/${encodeURIComponent(params.station as string)}/result`, {
+          method: "POST", headers: authHeaders(), body: JSON.stringify({ result: params.result }),
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ok(`Task result failed: ${(e as any).error}`); }
+        return ok(`Result posted to "${params.station}"`);
+      } catch (err) { return ok(`Task result failed: ${err}`); }
     },
   });
 

@@ -33,7 +33,7 @@ Just tell your agent:
 
 ```
 Install the-agents-openclaw plugin so I can watch you work as a pixel character.
-The hub is at https://the-agents.net. My API key is ___. Figure it out.
+The hub is at http://localhost:4242
 ```
 
 ## Self-Hosted Hub

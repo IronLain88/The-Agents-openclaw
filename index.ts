@@ -137,7 +137,7 @@ export default function register(api: any) {
     if (w.tasks?.length > 0) {
       lines.push(`**Task stations (interactive — visitors trigger these, you do the work):**`);
       for (const t of w.tasks) lines.push(`  - ${t}`);
-      lines.push(`*Workflow: subscribe({name}) → check_events() (blocks until triggered) → do the work → answer_task({station, result}) → check_events() again*`);
+      lines.push(`*Workflow: work_task({station}) → do the work (call update_state at each step!) → answer_task({station, result}) → work_task again*`);
     }
     if (w.signals.length > 0) lines.push(`**Signals:** ${w.signals.join(", ")}`);
     if (w.boards.length > 0) lines.push(`**Boards with content:** ${w.boards.join(", ")}`);
@@ -337,7 +337,7 @@ export default function register(api: any) {
       return {
         name: "check_events",
         label: "Check Events",
-        description: "Wait for the next event on your subscribed station (up to 10 min). For tasks, the event payload contains {station, instructions, prompt} telling you what to do.",
+        description: "Wait for the next event on your subscribed station (up to 10 min). For tasks, the event payload contains {station, instructions} telling you what to do.",
         parameters: { type: "object", properties: {} },
         async execute() {
           if (!identity.subscribedStation) return ok("Not subscribed. Call subscribe first.");
@@ -442,7 +442,7 @@ export default function register(api: any) {
         if (tasks.length > 0) {
           lines.push(`**Task stations (interactive — visitors trigger these, you do the work):**`);
           for (const t of tasks) lines.push(`  - ${t}`);
-          lines.push(`*Workflow: subscribe({name}) → check_events() (blocks until triggered) → do the work → answer_task({station, result}) → check_events() again*`);
+          lines.push(`*Workflow: work_task({station}) → do the work (call update_state at each step!) → answer_task({station, result}) → work_task again*`);
         }
         if (signals.length > 0) lines.push(`**Signals:** ${signals.join(", ")}`);
         if (boards.length > 0) lines.push(`**Boards with content:** ${boards.join(", ")}`);
@@ -858,9 +858,17 @@ export default function register(api: any) {
         let state = { status: "idle", result: null as string | null };
         try { if (asset.content?.data) state = JSON.parse(asset.content.data); } catch {}
         parts.push(`## Status: ${state.status}`);
-        if (state.status === "pending") parts.push("\nTask is running.");
-        else if (state.status === "done") parts.push("\nResult already posted.");
-        else parts.push("\nIdle. Subscribe and wait for a visitor to click Run.");
+        if (state.status === "pending") {
+          parts.push(`\n## What to do`);
+          parts.push(`1. Call update_state before EVERY step so viewers see you working (e.g. searching, reading, writing_code, thinking). This is mandatory — the user watches your character move around.`);
+          parts.push(`2. Do the work described above`);
+          parts.push(`3. Call answer_task("${params.station}", "<h2>Result</h2><p>your HTML result</p>")`);
+          parts.push(`4. answer_task will instruct you to call work_task again — you MUST do so`);
+        } else if (state.status === "done") {
+          parts.push("\nResult already posted.");
+        } else {
+          parts.push("\nIdle. Call work_task to wait for visitors.");
+        }
         return ok(parts.join("\n"));
       } catch (err) { return ok(`Failed: ${err}`); }
     },
@@ -869,7 +877,8 @@ export default function register(api: any) {
   api.registerTool({
     name: "answer_task",
     label: "Answer Task",
-    description: "Post your result (HTML) to a task station after completing the work from check_events.",
+    description: "Post your result (HTML) to a task station after completing the work from work_task. " +
+      "IMPORTANT: After this call returns, you MUST immediately call work_task() again to wait for the next visitor. Never stop the loop.",
     parameters: {
       type: "object",
       properties: {
@@ -884,10 +893,82 @@ export default function register(api: any) {
           method: "POST", headers: authHeaders(), body: JSON.stringify({ result: params.result }),
         });
         if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ok(`Task result failed: ${(e as any).error}`); }
-        return ok(`Result posted to "${params.station}"`);
+        return ok(`Result posted to "${params.station}".\n\n⚠️ REQUIRED NEXT STEP: Call work_task("${params.station}") now to wait for the next visitor. Do not stop — the task loop must continue.`);
       } catch (err) { return ok(`Task result failed: ${err}`); }
     },
   });
+
+  api.registerTool(
+    (ctx: any) => {
+      const identity = getIdentity(ctx?.agentId);
+      return {
+        name: "work_task",
+        label: "Work Task",
+        description: "Wait for a visitor to trigger a task. Blocks until someone clicks Run, then returns the instructions. " +
+          "After doing the work, call answer_task with your HTML result, then call work_task again to wait for the next visitor.",
+        parameters: {
+          type: "object",
+          properties: { station: { type: "string", description: 'The task station name, e.g. "Task_Table"' } },
+          required: ["station"],
+        },
+        async execute(_id: string, params: Record<string, unknown>) {
+          const station = params.station as string;
+          try {
+            // Walk to the task station
+            await reportToHub(station, `Waiting at ${station}`, identity);
+
+            const p = await fetchProperty();
+            const asset = (p.assets || []).find((a: any) => a.station === station && a.task);
+            if (!asset) return ok(`No task station "${station}" found`);
+            if (!asset.trigger) return ok(`Task station "${station}" has no trigger`);
+
+            // Check if already pending
+            let state = { status: "idle" } as Record<string, unknown>;
+            try { if (asset.content?.data) state = JSON.parse(asset.content.data); } catch {}
+
+            if (state.status !== "pending") {
+              // Subscribe and wait for visitor with keepalive heartbeats
+              identity.subscribedStation = station;
+              if (!identity.signalWs || identity.signalWs.readyState !== WebSocket.OPEN) connectSignalWs(identity);
+              const keepalive = setInterval(() => reportToHub(station, `Waiting at ${station}`, identity).catch(() => {}), 120_000);
+              try {
+                if (identity.signalQueue.length > 0) {
+                  identity.signalQueue.shift();
+                } else {
+                  await new Promise<SignalMessage>((resolve, reject) => {
+                    identity.pendingResolve = resolve;
+                    setTimeout(() => { if (identity.pendingResolve === resolve) { identity.pendingResolve = null; reject(new Error("timeout")); } }, 10 * 60_000);
+                  });
+                }
+              } catch {
+                return ok(`Timeout waiting for visitor on "${station}". Call work_task again to keep waiting.`);
+              } finally {
+                clearInterval(keepalive);
+              }
+            }
+
+            // Read the now-pending task
+            const freshP = await fetchProperty();
+            const freshAsset = (freshP.assets || []).find((a: any) => a.station === station && a.task);
+            let freshState = { status: "idle" } as Record<string, unknown>;
+            try { if (freshAsset?.content?.data) freshState = JSON.parse(freshAsset.content.data); } catch {}
+
+            const parts: string[] = [`# Task: ${station}\n`];
+            const instructions = (freshAsset as any)?.instructions;
+            if (instructions) parts.push(`## Instructions\n${instructions}\n`);
+            parts.push(`## Required steps`);
+            parts.push(`1. Call update_state before EVERY step so viewers see you working (e.g. searching, reading, writing_code, thinking). This is mandatory — the user watches your character move around.`);
+            parts.push(`2. Do the work described above`);
+            parts.push(`3. Call answer_task("${station}", "<h2>Result</h2><p>your HTML</p>")`);
+            parts.push(`4. answer_task will tell you to call work_task again — you MUST do so to keep the loop running`);
+
+            return ok(parts.join("\n"));
+          } catch (err) { return ok(`work_task failed: ${err}`); }
+        },
+      };
+    },
+    { names: ["work_task"] }
+  );
 
   // --- Startup: register default agent and start heartbeat ---
   const defaultIdentity = getIdentity("main");

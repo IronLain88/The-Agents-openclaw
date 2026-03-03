@@ -77,7 +77,7 @@ export default function register(api: any) {
 
   // Per-agent identity map: openclaw agentId -> hub identity
   const agentMap = new Map<string, AgentIdentity>();
-  const agentsConfig = config.agents as Record<string, { name?: string; sprite?: string }> | undefined;
+  const agentsConfig = config.agents as Record<string, { name?: string; sprite?: string; hubId?: string }> | undefined;
   if (agentsConfig) api.logger.info(`[the-agents] Agent map: ${Object.keys(agentsConfig).join(", ")}`);
 
   // Legacy flat config fallback

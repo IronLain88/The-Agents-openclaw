@@ -5,6 +5,14 @@
 [![npm](https://img.shields.io/npm/v/the-agents-openclaw)](https://www.npmjs.com/package/the-agents-openclaw)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
+```bash
+openclaw plugins install the-agents-openclaw
+openclaw plugins enable the-agents
+openclaw config set plugins.entries.the-agents.config.hubUrl "http://localhost:4242"
+```
+
+---
+
 OpenClaw plugin that connects your agents to [The Agents Hub](https://github.com/IronLain88/The-Agents-Hub). Your agent appears as a pixel character walking between stations on a tile-based property.
 
 ## Quick Start

@@ -981,6 +981,21 @@ export default function register(api: any) {
     }
   }, 30_000);
 
+  // Graceful shutdown: remove all agents from hub
+  async function cleanup() {
+    const removals = [...agentMap.values()].map(identity =>
+      fetch(`${hubUrl}/api/agents/${encodeURIComponent(identity.hubId)}`, {
+        method: "DELETE",
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      }).catch(() => {})
+    );
+    await Promise.all(removals);
+    api.logger.info(`[the-agents] Removed ${removals.length} agent(s) from hub`);
+  }
+
+  process.on("SIGINT", async () => { await cleanup(); process.exit(0); });
+  process.on("SIGTERM", async () => { await cleanup(); process.exit(0); });
+
   const agentNames = agentsConfig
     ? Object.entries(agentsConfig).map(([k, v]) => `${v.name || k} (${k})`).join(", ")
     : `${defaultName} (${defaultHubId})`;

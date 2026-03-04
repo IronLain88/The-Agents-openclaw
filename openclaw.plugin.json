@@ -42,6 +42,21 @@
             "sprite": { "type": "string" }
           }
         }
+      },
+      "autoSpawn": {
+        "type": "boolean",
+        "description": "Auto-spawn agents for pending task stations. When true, polls for pending tasks and spawns openclaw agents to handle them.",
+        "default": false
+      },
+      "autoSpawnAgent": {
+        "type": "string",
+        "description": "OpenClaw agent ID to spawn for tasks (default: 'main')",
+        "default": "main"
+      },
+      "autoSpawnInterval": {
+        "type": "number",
+        "description": "Polling interval in seconds for pending tasks (default: 15)",
+        "default": 15
       }
     },
     "additionalProperties": false

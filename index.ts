@@ -995,9 +995,10 @@ export default function register(api: any) {
   const defaultIdentity = getIdentity("main");
   reportToHub("idle", "Agent connected", defaultIdentity);
 
-  // Heartbeat: keep all registered agents alive
+  // Heartbeat: keep all registered agents alive (skip auto-spawn workers — they have their own)
   setInterval(() => {
     for (const identity of agentMap.values()) {
+      if (workerHubIds.has(identity.hubId)) continue;
       reportToHub(identity.state, identity.detail, identity);
     }
   }, 30_000);
@@ -1028,6 +1029,8 @@ export default function register(api: any) {
   const autoSpawnAgents = (config.autoSpawnAgents as string[]) || [];
   const autoSpawnInterval = ((config.autoSpawnInterval as number) || 15) * 1000;
   const workerIdleStation = (config.workerIdleStation as string) || "idle";
+  // Worker hubIds managed by auto-spawn — skip in the general heartbeat
+  const workerHubIds = new Set(autoSpawnAgents.map(id => agentsConfig?.[id]?.hubId || id));
 
   if (autoSpawn && autoSpawnAgents.length > 0) {
     interface Worker { agentId: string; hubId: string; name: string; sprite: string; busy: boolean; }

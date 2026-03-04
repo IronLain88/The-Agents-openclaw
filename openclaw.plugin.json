@@ -42,6 +42,26 @@
             "sprite": { "type": "string" }
           }
         }
+      },
+      "autoSpawn": {
+        "type": "boolean",
+        "description": "Auto-spawn agents for pending task stations. When true, polls for pending tasks and spawns openclaw agents to handle them.",
+        "default": false
+      },
+      "autoSpawnAgents": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of OpenClaw agent IDs available as task workers. Each sits idle on the property and picks up tasks when triggered. Must match keys in the 'agents' map."
+      },
+      "autoSpawnInterval": {
+        "type": "number",
+        "description": "Polling interval in seconds for pending tasks (default: 15)",
+        "default": 15
+      },
+      "workerIdleStation": {
+        "type": "string",
+        "description": "Station where idle workers sit (default: 'idle')",
+        "default": "idle"
       }
     },
     "additionalProperties": false

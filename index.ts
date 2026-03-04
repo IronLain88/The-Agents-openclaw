@@ -418,12 +418,15 @@ export default function register(api: any) {
         const stations: string[] = [];
         const signals: string[] = [];
         const tasks: string[] = [];
+        const openclawTasks: string[] = [];
         const boards: string[] = [];
         let inboxCount = 0;
         for (const a of assets) {
           if (!a.station) continue;
           if ((a as any).task) {
-            tasks.push(`${a.station} — ${(a as any).instructions || "(no instructions)"}`);
+            const entry = `${a.station} — ${(a as any).instructions || "(no instructions)"}`;
+            if ((a as any).openclaw_task) openclawTasks.push(entry);
+            else tasks.push(entry);
             continue;
           }
           if (a.trigger) {
@@ -443,6 +446,10 @@ export default function register(api: any) {
           lines.push(`**Task stations (interactive — visitors trigger these, you do the work):**`);
           for (const t of tasks) lines.push(`  - ${t}`);
           lines.push(`*Workflow: work_task({station}) → do the work (call update_state at each step!) → answer_task({station, result}) → work_task again*`);
+        }
+        if (openclawTasks.length > 0) {
+          lines.push(`**OpenClaw task stations (auto-spawn — do NOT call work_task on these):**`);
+          for (const t of openclawTasks) lines.push(`  - ${t}`);
         }
         if (signals.length > 0) lines.push(`**Signals:** ${signals.join(", ")}`);
         if (boards.length > 0) lines.push(`**Boards with content:** ${boards.join(", ")}`);
@@ -889,11 +896,24 @@ export default function register(api: any) {
     },
     async execute(_id: string, params: Record<string, unknown>) {
       try {
-        const res = await fetch(`${hubUrl}/api/task/${encodeURIComponent(params.station as string)}/result`, {
+        const station = params.station as string;
+        const res = await fetch(`${hubUrl}/api/task/${encodeURIComponent(station)}/result`, {
           method: "POST", headers: authHeaders(), body: JSON.stringify({ result: params.result }),
         });
         if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ok(`Task result failed: ${(e as any).error}`); }
-        return ok(`Result posted to "${params.station}".\n\n⚠️ REQUIRED NEXT STEP: Call work_task("${params.station}") now to wait for the next visitor. Do not stop — the task loop must continue.`);
+
+        // Check if openclaw_task — spawned agents should exit, not loop
+        let isOpenclawTask = false;
+        try {
+          const p = await fetchProperty();
+          const asset = (p.assets || []).find((a: any) => a.station === station && a.task);
+          if ((asset as any)?.openclaw_task) isOpenclawTask = true;
+        } catch {}
+
+        if (isOpenclawTask) {
+          return ok(`Result posted to "${station}".\n\n✅ Your work is done. This is an openclaw_task station — no need to loop. You may exit or go idle.`);
+        }
+        return ok(`Result posted to "${station}".\n\n⚠️ REQUIRED NEXT STEP: Call work_task("${station}") now to wait for the next visitor. Do not stop — the task loop must continue.`);
       } catch (err) { return ok(`Task result failed: ${err}`); }
     },
   });
@@ -920,6 +940,7 @@ export default function register(api: any) {
             const p = await fetchProperty();
             const asset = (p.assets || []).find((a: any) => a.station === station && a.task);
             if (!asset) return ok(`No task station "${station}" found`);
+            if ((asset as any).openclaw_task) return ok(`"${station}" is an openclaw_task station — agents are spawned on demand when visitors click Run. Do NOT call work_task on these. Use answer_task after completing the work instead.`);
             if (!asset.trigger) return ok(`Task station "${station}" has no trigger`);
 
             // Check if already pending
@@ -974,9 +995,10 @@ export default function register(api: any) {
   const defaultIdentity = getIdentity("main");
   reportToHub("idle", "Agent connected", defaultIdentity);
 
-  // Heartbeat: keep all registered agents alive
+  // Heartbeat: keep all registered agents alive (skip auto-spawn workers — they have their own)
   setInterval(() => {
     for (const identity of agentMap.values()) {
+      if (workerHubIds.has(identity.hubId)) continue;
       reportToHub(identity.state, identity.detail, identity);
     }
   }, 30_000);
@@ -1000,4 +1022,138 @@ export default function register(api: any) {
     ? Object.entries(agentsConfig).map(([k, v]) => `${v.name || k} (${k})`).join(", ")
     : `${defaultName} (${defaultHubId})`;
   api.logger.info(`[the-agents] Reporting to ${hubUrl} — agents: ${agentNames}`);
+
+  // --- Auto-spawn: poll for pending tasks and spawn agents ---
+
+  const autoSpawn = config.autoSpawn === true;
+  const autoSpawnAgents = (config.autoSpawnAgents as string[]) || [];
+  const autoSpawnInterval = ((config.autoSpawnInterval as number) || 15) * 1000;
+  const workerIdleStation = (config.workerIdleStation as string) || "idle";
+  // Worker hubIds managed by auto-spawn — skip in the general heartbeat
+  const workerHubIds = new Set(autoSpawnAgents.map(id => agentsConfig?.[id]?.hubId || id));
+
+  if (autoSpawn && autoSpawnAgents.length > 0) {
+    interface Worker { agentId: string; hubId: string; name: string; sprite: string; busy: boolean; }
+    const workers: Worker[] = autoSpawnAgents.map(id => {
+      const ac = agentsConfig?.[id];
+      return {
+        agentId: id,
+        hubId: ac?.hubId || id,
+        name: ac?.name || id,
+        sprite: ac?.sprite || defaultSprite,
+        busy: false,
+      };
+    });
+
+    // Register all workers at idle station
+    for (const w of workers) {
+      fetch(`${hubUrl}/api/state`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({
+          agent_id: w.hubId, agent_name: w.name, state: workerIdleStation,
+          detail: "Waiting for tasks", group: "idle", sprite: w.sprite,
+          owner_id: ownerId, owner_name: ownerName,
+        }),
+      }).catch(() => {});
+    }
+
+    // Keep idle workers alive (hub removes after 3 min)
+    setInterval(() => {
+      for (const w of workers) {
+        if (!w.busy) {
+          fetch(`${hubUrl}/api/state`, {
+            method: "POST", headers: authHeaders(),
+            body: JSON.stringify({
+              agent_id: w.hubId, agent_name: w.name, state: workerIdleStation,
+              detail: "Waiting for tasks", group: "idle", sprite: w.sprite,
+              owner_id: ownerId, owner_name: ownerName,
+            }),
+          }).catch(() => {});
+        }
+      }
+    }, 120_000);
+
+    api.logger.info(`[the-agents] Auto-spawn: ${workers.map(w => w.name).join(", ")} — idle at "${workerIdleStation}", polling every ${autoSpawnInterval / 1000}s`);
+
+    setInterval(async () => {
+      const freeWorker = workers.find(w => !w.busy);
+      if (!freeWorker) return;
+
+      try {
+        const property = await fetchProperty();
+        const taskAssets = (property.assets || []).filter((a: any) => a.openclaw_task);
+
+        for (const asset of taskAssets) {
+          const station = asset.station as string;
+
+          let state = { status: "idle" } as Record<string, unknown>;
+          try { if (asset.content?.data) state = JSON.parse(asset.content.data); } catch {}
+
+          if (state.status !== "pending" || state.claimedBy) continue;
+
+          const claimRes = await fetch(`${hubUrl}/api/task/${encodeURIComponent(station)}/claim`, {
+            method: "POST", headers: authHeaders(),
+            body: JSON.stringify({ agent_id: freeWorker.hubId }),
+          });
+          if (!claimRes.ok) continue;
+          const claimData = await claimRes.json() as { instructions?: string; prompt?: string };
+
+          freeWorker.busy = true;
+          api.logger.info(`[the-agents] ${freeWorker.name} claimed task "${station}"`);
+
+          // Move worker to the desk
+          fetch(`${hubUrl}/api/state`, {
+            method: "POST", headers: authHeaders(),
+            body: JSON.stringify({
+              agent_id: freeWorker.hubId, agent_name: freeWorker.name, state: station,
+              detail: "Starting task...", group: "creating", sprite: freeWorker.sprite,
+              owner_id: ownerId, owner_name: ownerName,
+            }),
+          }).catch(() => {});
+
+          const instructions = claimData.instructions || "No instructions provided";
+          const visitorPrompt = claimData.prompt;
+          const promptParts = [
+            `A visitor triggered task station "${station}". Here are the instructions:`,
+            "", instructions,
+          ];
+          if (visitorPrompt) {
+            promptParts.push("", "The visitor also wrote:", "", visitorPrompt);
+          }
+          promptParts.push("", "Do the work, then call answer_task with your HTML result.");
+          promptParts.push("Call update_state before every step so viewers see you working.");
+
+          const { exec } = await import("child_process");
+          const escaped = promptParts.join("\n").replace(/'/g, "'\\''");
+          exec(
+            `openclaw agent --agent ${freeWorker.agentId} --message '${escaped}' --timeout 300`,
+            { cwd: process.cwd() },
+            (err) => {
+              freeWorker.busy = false;
+              // Return worker to idle station
+              fetch(`${hubUrl}/api/state`, {
+                method: "POST", headers: authHeaders(),
+                body: JSON.stringify({
+                  agent_id: freeWorker.hubId, agent_name: freeWorker.name, state: workerIdleStation,
+                  detail: "Waiting for tasks", group: "idle", sprite: freeWorker.sprite,
+                  owner_id: ownerId, owner_name: ownerName,
+                }),
+              }).catch(() => {});
+              if (err) {
+                api.logger.error(`[the-agents] ${freeWorker.name} failed "${station}": ${err.message}`);
+                fetch(`${hubUrl}/api/task/${encodeURIComponent(station)}/clear`, {
+                  method: "POST", headers: authHeaders(),
+                }).catch(() => {});
+              } else {
+                api.logger.info(`[the-agents] ${freeWorker.name} completed "${station}"`);
+              }
+            }
+          );
+          break; // One task per poll cycle
+        }
+      } catch (err) {
+        api.logger.error(`[the-agents] Auto-spawn poll error: ${err}`);
+      }
+    }, autoSpawnInterval);
+  }
 }

@@ -85,17 +85,8 @@ export default function register(api: any) {
   const defaultSprite = config.agentSprite || "";
   const defaultHubId = config.agentId || `openclaw-${Math.random().toString(36).slice(2, 6)}`;
 
-  // Active task workers: maps openclaw agentId -> overridden hubId for spawned tasks
-  const taskWorkerOverrides = new Map<string, string>();
-
   function getIdentity(openclawAgentId?: string): AgentIdentity {
     const key = openclawAgentId || "main";
-    // Check for active task worker override (per-station hub ID)
-    const overrideId = taskWorkerOverrides.get(key);
-    if (overrideId) {
-      const cached = agentMap.get(overrideId);
-      if (cached) return cached;
-    }
     let identity = agentMap.get(key);
     if (identity) return identity;
 
@@ -1034,15 +1025,57 @@ export default function register(api: any) {
   // --- Auto-spawn: poll for pending tasks and spawn agents ---
 
   const autoSpawn = config.autoSpawn === true;
-  const autoSpawnAgent = (config.autoSpawnAgent as string) || "main";
+  const autoSpawnAgents = (config.autoSpawnAgents as string[]) || [];
   const autoSpawnInterval = ((config.autoSpawnInterval as number) || 15) * 1000;
-  let workerBusy = false;
+  const workerIdleStation = (config.workerIdleStation as string) || "idle";
 
-  if (autoSpawn) {
-    api.logger.info(`[the-agents] Auto-spawn enabled — polling every ${autoSpawnInterval / 1000}s, spawning agent "${autoSpawnAgent}"`);
+  if (autoSpawn && autoSpawnAgents.length > 0) {
+    interface Worker { agentId: string; hubId: string; name: string; sprite: string; busy: boolean; }
+    const workers: Worker[] = autoSpawnAgents.map(id => {
+      const ac = agentsConfig?.[id];
+      return {
+        agentId: id,
+        hubId: ac?.hubId || id,
+        name: ac?.name || id,
+        sprite: ac?.sprite || defaultSprite,
+        busy: false,
+      };
+    });
+
+    // Register all workers at idle station
+    for (const w of workers) {
+      fetch(`${hubUrl}/api/state`, {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({
+          agent_id: w.hubId, agent_name: w.name, state: workerIdleStation,
+          detail: "Waiting for tasks", group: "idle", sprite: w.sprite,
+          owner_id: ownerId, owner_name: ownerName,
+        }),
+      }).catch(() => {});
+    }
+
+    // Keep idle workers alive (hub removes after 3 min)
+    setInterval(() => {
+      for (const w of workers) {
+        if (!w.busy) {
+          fetch(`${hubUrl}/api/state`, {
+            method: "POST", headers: authHeaders(),
+            body: JSON.stringify({
+              agent_id: w.hubId, agent_name: w.name, state: workerIdleStation,
+              detail: "Waiting for tasks", group: "idle", sprite: w.sprite,
+              owner_id: ownerId, owner_name: ownerName,
+            }),
+          }).catch(() => {});
+        }
+      }
+    }, 120_000);
+
+    api.logger.info(`[the-agents] Auto-spawn: ${workers.map(w => w.name).join(", ")} — idle at "${workerIdleStation}", polling every ${autoSpawnInterval / 1000}s`);
 
     setInterval(async () => {
-      if (workerBusy) return; // Single worker — wait until current task finishes
+      const freeWorker = workers.find(w => !w.busy);
+      if (!freeWorker) return;
+
       try {
         const property = await fetchProperty();
         const taskAssets = (property.assets || []).filter((a: any) => a.openclaw_task);
@@ -1055,36 +1088,22 @@ export default function register(api: any) {
 
           if (state.status !== "pending" || state.claimedBy) continue;
 
-          // Claim the task
           const claimRes = await fetch(`${hubUrl}/api/task/${encodeURIComponent(station)}/claim`, {
-            method: "POST",
-            headers: authHeaders(),
-            body: JSON.stringify({ agent_id: autoSpawnAgent }),
+            method: "POST", headers: authHeaders(),
+            body: JSON.stringify({ agent_id: freeWorker.hubId }),
           });
           if (!claimRes.ok) continue;
           const claimData = await claimRes.json() as { instructions?: string; prompt?: string };
 
-          workerBusy = true;
-          const workerHubId = `${autoSpawnAgent}-${station.replace(/\s+/g, "_")}`;
-          const workerName = agentsConfig?.[autoSpawnAgent]?.name || autoSpawnAgent;
-          const workerSprite = agentsConfig?.[autoSpawnAgent]?.sprite || defaultSprite;
-          api.logger.info(`[the-agents] Auto-spawn: claimed task "${station}", spawning "${workerHubId}"`);
+          freeWorker.busy = true;
+          api.logger.info(`[the-agents] ${freeWorker.name} claimed task "${station}"`);
 
-          // Create a per-station identity so the spawned agent reports with unique hub ID
-          const workerIdentity: AgentIdentity = {
-            hubId: workerHubId, name: workerName, sprite: workerSprite,
-            state: station, detail: "Starting task...",
-            subscribedStation: null, signalWs: null, signalQueue: [], pendingResolve: null,
-          };
-          agentMap.set(workerHubId, workerIdentity);
-          taskWorkerOverrides.set(autoSpawnAgent, workerHubId);
-
-          // Register agent at the desk so it appears immediately
+          // Move worker to the desk
           fetch(`${hubUrl}/api/state`, {
             method: "POST", headers: authHeaders(),
             body: JSON.stringify({
-              agent_id: workerHubId, agent_name: workerName, state: station,
-              detail: "Starting task...", group: "creating", sprite: workerSprite,
+              agent_id: freeWorker.hubId, agent_name: freeWorker.name, state: station,
+              detail: "Starting task...", group: "creating", sprite: freeWorker.sprite,
               owner_id: ownerId, owner_name: ownerName,
             }),
           }).catch(() => {});
@@ -1093,41 +1112,41 @@ export default function register(api: any) {
           const visitorPrompt = claimData.prompt;
           const promptParts = [
             `A visitor triggered task station "${station}". Here are the instructions:`,
-            "",
-            instructions,
+            "", instructions,
           ];
           if (visitorPrompt) {
             promptParts.push("", "The visitor also wrote:", "", visitorPrompt);
           }
           promptParts.push("", "Do the work, then call answer_task with your HTML result.");
           promptParts.push("Call update_state before every step so viewers see you working.");
-          const prompt = promptParts.join("\n");
 
-          // Spawn openclaw agent in background
           const { exec } = await import("child_process");
-          const escaped = prompt.replace(/'/g, "'\\''");
+          const escaped = promptParts.join("\n").replace(/'/g, "'\\''");
           exec(
-            `openclaw agent --agent ${autoSpawnAgent} --message '${escaped}' --timeout 300`,
+            `openclaw agent --agent ${freeWorker.agentId} --message '${escaped}' --timeout 300`,
             { cwd: process.cwd() },
-            (err, stdout, stderr) => {
-              // Clean up: remove override, identity, and agent from hub
-              workerBusy = false;
-              taskWorkerOverrides.delete(autoSpawnAgent);
-              agentMap.delete(workerHubId);
-              fetch(`${hubUrl}/api/agents/${encodeURIComponent(workerHubId)}`, {
-                method: "DELETE", headers: authHeaders(),
+            (err) => {
+              freeWorker.busy = false;
+              // Return worker to idle station
+              fetch(`${hubUrl}/api/state`, {
+                method: "POST", headers: authHeaders(),
+                body: JSON.stringify({
+                  agent_id: freeWorker.hubId, agent_name: freeWorker.name, state: workerIdleStation,
+                  detail: "Waiting for tasks", group: "idle", sprite: freeWorker.sprite,
+                  owner_id: ownerId, owner_name: ownerName,
+                }),
               }).catch(() => {});
               if (err) {
-                api.logger.error(`[the-agents] Auto-spawn agent failed for "${station}": ${err.message}`);
+                api.logger.error(`[the-agents] ${freeWorker.name} failed "${station}": ${err.message}`);
                 fetch(`${hubUrl}/api/task/${encodeURIComponent(station)}/clear`, {
                   method: "POST", headers: authHeaders(),
                 }).catch(() => {});
               } else {
-                api.logger.info(`[the-agents] Auto-spawn agent completed "${station}"`);
+                api.logger.info(`[the-agents] ${freeWorker.name} completed "${station}"`);
               }
             }
           );
-          break; // Only one task at a time
+          break; // One task per poll cycle
         }
       } catch (err) {
         api.logger.error(`[the-agents] Auto-spawn poll error: ${err}`);

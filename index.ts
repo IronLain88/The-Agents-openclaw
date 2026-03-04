@@ -1036,19 +1036,19 @@ export default function register(api: any) {
   const autoSpawn = config.autoSpawn === true;
   const autoSpawnAgent = (config.autoSpawnAgent as string) || "main";
   const autoSpawnInterval = ((config.autoSpawnInterval as number) || 15) * 1000;
-  const activeTasks = new Set<string>();
+  let workerBusy = false;
 
   if (autoSpawn) {
     api.logger.info(`[the-agents] Auto-spawn enabled — polling every ${autoSpawnInterval / 1000}s, spawning agent "${autoSpawnAgent}"`);
 
     setInterval(async () => {
+      if (workerBusy) return; // Single worker — wait until current task finishes
       try {
         const property = await fetchProperty();
         const taskAssets = (property.assets || []).filter((a: any) => a.openclaw_task);
 
         for (const asset of taskAssets) {
           const station = asset.station as string;
-          if (activeTasks.has(station)) continue;
 
           let state = { status: "idle" } as Record<string, unknown>;
           try { if (asset.content?.data) state = JSON.parse(asset.content.data); } catch {}
@@ -1064,7 +1064,7 @@ export default function register(api: any) {
           if (!claimRes.ok) continue;
           const claimData = await claimRes.json() as { instructions?: string; prompt?: string };
 
-          activeTasks.add(station);
+          workerBusy = true;
           const workerHubId = `${autoSpawnAgent}-${station.replace(/\s+/g, "_")}`;
           const workerName = agentsConfig?.[autoSpawnAgent]?.name || autoSpawnAgent;
           const workerSprite = agentsConfig?.[autoSpawnAgent]?.sprite || defaultSprite;
@@ -1110,8 +1110,8 @@ export default function register(api: any) {
             `openclaw agent --agent ${autoSpawnAgent} --message '${escaped}' --timeout 300`,
             { cwd: process.cwd() },
             (err, stdout, stderr) => {
-              activeTasks.delete(station);
               // Clean up: remove override, identity, and agent from hub
+              workerBusy = false;
               taskWorkerOverrides.delete(autoSpawnAgent);
               agentMap.delete(workerHubId);
               fetch(`${hubUrl}/api/agents/${encodeURIComponent(workerHubId)}`, {
@@ -1127,6 +1127,7 @@ export default function register(api: any) {
               }
             }
           );
+          break; // Only one task at a time
         }
       } catch (err) {
         api.logger.error(`[the-agents] Auto-spawn poll error: ${err}`);

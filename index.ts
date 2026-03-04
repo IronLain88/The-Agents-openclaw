@@ -1053,20 +1053,24 @@ export default function register(api: any) {
             body: JSON.stringify({ agent_id: autoSpawnAgent }),
           });
           if (!claimRes.ok) continue;
-          const claimData = await claimRes.json() as { instructions?: string };
+          const claimData = await claimRes.json() as { instructions?: string; prompt?: string };
 
           activeTasks.add(station);
           api.logger.info(`[the-agents] Auto-spawn: claimed task "${station}", spawning agent "${autoSpawnAgent}"`);
 
           const instructions = claimData.instructions || "No instructions provided";
-          const prompt = [
+          const visitorPrompt = claimData.prompt;
+          const promptParts = [
             `A visitor triggered task station "${station}". Here are the instructions:`,
             "",
             instructions,
-            "",
-            "Do the work, then call answer_task with your HTML result.",
-            "Call update_state before every step so viewers see you working.",
-          ].join("\n");
+          ];
+          if (visitorPrompt) {
+            promptParts.push("", "The visitor also wrote:", "", visitorPrompt);
+          }
+          promptParts.push("", "Do the work, then call answer_task with your HTML result.");
+          promptParts.push("Call update_state before every step so viewers see you working.");
+          const prompt = promptParts.join("\n");
 
           // Spawn openclaw agent in background
           const { exec } = await import("child_process");

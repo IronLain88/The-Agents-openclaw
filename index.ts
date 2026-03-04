@@ -87,13 +87,19 @@ export default function register(api: any) {
 
   function getIdentity(openclawAgentId?: string): AgentIdentity {
     const key = openclawAgentId || "main";
+    // Allow env override for spawned task workers (unique hub ID per station)
+    const envHubId = process.env.THE_AGENTS_HUB_ID;
+    if (envHubId) {
+      const cached = agentMap.get(envHubId);
+      if (cached) return cached;
+    }
     let identity = agentMap.get(key);
     if (identity) return identity;
 
     // Create new identity from agents config or legacy fallback
     const ac = agentsConfig?.[key];
     identity = {
-      hubId: ac?.hubId || (agentsConfig ? key : defaultHubId),
+      hubId: envHubId || ac?.hubId || (agentsConfig ? key : defaultHubId),
       name: ac?.name || (agentsConfig ? key : defaultName),
       sprite: ac?.sprite || defaultSprite,
       state: "idle",
@@ -103,7 +109,7 @@ export default function register(api: any) {
       signalQueue: [],
       pendingResolve: null,
     };
-    agentMap.set(key, identity);
+    agentMap.set(envHubId || key, identity);
     return identity;
   }
 
@@ -1056,7 +1062,20 @@ export default function register(api: any) {
           const claimData = await claimRes.json() as { instructions?: string; prompt?: string };
 
           activeTasks.add(station);
-          api.logger.info(`[the-agents] Auto-spawn: claimed task "${station}", spawning agent "${autoSpawnAgent}"`);
+          const workerHubId = `${autoSpawnAgent}-${station.replace(/\s+/g, "_")}`;
+          const workerName = agentsConfig?.[autoSpawnAgent]?.name || autoSpawnAgent;
+          const workerSprite = agentsConfig?.[autoSpawnAgent]?.sprite || defaultSprite;
+          api.logger.info(`[the-agents] Auto-spawn: claimed task "${station}", spawning "${workerHubId}"`);
+
+          // Register agent at the desk so it appears immediately
+          fetch(`${hubUrl}/api/state`, {
+            method: "POST", headers: authHeaders(),
+            body: JSON.stringify({
+              agent_id: workerHubId, agent_name: workerName, state: station,
+              detail: "Starting task...", group: "creating", sprite: workerSprite,
+              owner_id: ownerId, owner_name: ownerName,
+            }),
+          }).catch(() => {});
 
           const instructions = claimData.instructions || "No instructions provided";
           const visitorPrompt = claimData.prompt;
@@ -1072,20 +1091,22 @@ export default function register(api: any) {
           promptParts.push("Call update_state before every step so viewers see you working.");
           const prompt = promptParts.join("\n");
 
-          // Spawn openclaw agent in background
+          // Spawn openclaw agent in background with unique hub ID
           const { exec } = await import("child_process");
           const escaped = prompt.replace(/'/g, "'\\''");
           exec(
             `openclaw agent --agent ${autoSpawnAgent} --message '${escaped}' --timeout 300`,
-            { cwd: process.cwd() },
+            { cwd: process.cwd(), env: { ...process.env, THE_AGENTS_HUB_ID: workerHubId } },
             (err, stdout, stderr) => {
               activeTasks.delete(station);
+              // Remove the agent from the hub (disappear from desk)
+              fetch(`${hubUrl}/api/agents/${encodeURIComponent(workerHubId)}`, {
+                method: "DELETE", headers: authHeaders(),
+              }).catch(() => {});
               if (err) {
                 api.logger.error(`[the-agents] Auto-spawn agent failed for "${station}": ${err.message}`);
-                // Reset task to idle on failure
                 fetch(`${hubUrl}/api/task/${encodeURIComponent(station)}/clear`, {
-                  method: "POST",
-                  headers: authHeaders(),
+                  method: "POST", headers: authHeaders(),
                 }).catch(() => {});
               } else {
                 api.logger.info(`[the-agents] Auto-spawn agent completed "${station}"`);

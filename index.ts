@@ -342,7 +342,7 @@ export default function register(api: any) {
         async execute() {
           if (!identity.subscribedStation) return ok("Not subscribed. Call subscribe first.");
           if (!identity.signalWs || identity.signalWs.readyState !== WebSocket.OPEN) connectSignalWs(identity);
-          const keepAlive = setInterval(() => { reportToHub(identity.subscribedStation!, "Listening for signal", identity); }, 30_000);
+          const keepAlive = setInterval(() => { reportToHub(identity.subscribedStation!, "Listening for signal", identity); }, 120_000);
           try {
             let event: string;
             if (identity.signalQueue.length > 0) { event = formatSignalEvent(identity.signalQueue.shift()!, identity); }
@@ -991,39 +991,9 @@ export default function register(api: any) {
     { names: ["work_task"] }
   );
 
-  // --- Startup: register default agent and start heartbeat ---
-  const defaultIdentity = getIdentity("main");
-  reportToHub("idle", "Agent connected", defaultIdentity);
-
-  // Heartbeat: keep all registered agents alive (skip auto-spawn workers — they have their own)
-  setInterval(() => {
-    for (const identity of agentMap.values()) {
-      if (workerHubIds.has(identity.hubId)) continue;
-      reportToHub(identity.state, identity.detail, identity);
-    }
-  }, 30_000);
-
-  // Graceful shutdown: remove all agents from hub
-  async function cleanup() {
-    const removals = [...agentMap.values()].map(identity =>
-      fetch(`${hubUrl}/api/agents/${encodeURIComponent(identity.hubId)}`, {
-        method: "DELETE",
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-      }).catch(() => {})
-    );
-    await Promise.all(removals);
-    api.logger.info(`[the-agents] Removed ${removals.length} agent(s) from hub`);
-  }
-
-  process.on("SIGINT", async () => { await cleanup(); process.exit(0); });
-  process.on("SIGTERM", async () => { await cleanup(); process.exit(0); });
-
-  const agentNames = agentsConfig
-    ? Object.entries(agentsConfig).map(([k, v]) => `${v.name || k} (${k})`).join(", ")
-    : `${defaultName} (${defaultHubId})`;
-  api.logger.info(`[the-agents] Reporting to ${hubUrl} — agents: ${agentNames}`);
-
-  // --- Auto-spawn: poll for pending tasks and spawn agents ---
+  // Detect gateway vs spawned agent: first plugin load = gateway, re-loads = spawned agents
+  const isGateway = !(globalThis as any).__theAgentsInitialized__;
+  (globalThis as any).__theAgentsInitialized__ = true;
 
   const autoSpawn = config.autoSpawn === true;
   const autoSpawnAgents = (config.autoSpawnAgents as string[]) || [];
@@ -1032,8 +1002,44 @@ export default function register(api: any) {
   // Worker hubIds managed by auto-spawn — skip in the general heartbeat
   const workerHubIds = new Set(autoSpawnAgents.map(id => agentsConfig?.[id]?.hubId || id));
 
-  if (autoSpawn && autoSpawnAgents.length > 0) {
-    interface Worker { agentId: string; hubId: string; name: string; sprite: string; busy: boolean; }
+  if (isGateway) {
+    // --- Startup: register default agent and start heartbeat ---
+    const defaultIdentity = getIdentity("main");
+    reportToHub("idle", "Agent connected", defaultIdentity);
+
+    // Heartbeat: keep all registered agents alive (skip auto-spawn workers — they have their own)
+    // 120s is well within the hub's 5-min cleanup window
+    setInterval(() => {
+      for (const identity of agentMap.values()) {
+        if (workerHubIds.has(identity.hubId)) continue;
+        reportToHub(identity.state, identity.detail, identity);
+      }
+    }, 120_000);
+
+    // Graceful shutdown: remove all agents from hub
+    async function cleanup() {
+      const removals = [...agentMap.values()].map(identity =>
+        fetch(`${hubUrl}/api/agents/${encodeURIComponent(identity.hubId)}`, {
+          method: "DELETE",
+          headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        }).catch(() => {})
+      );
+      await Promise.all(removals);
+      api.logger.info(`[the-agents] Removed ${removals.length} agent(s) from hub`);
+    }
+
+    process.on("SIGINT", async () => { await cleanup(); process.exit(0); });
+    process.on("SIGTERM", async () => { await cleanup(); process.exit(0); });
+  }
+
+  const agentNames = agentsConfig
+    ? Object.entries(agentsConfig).map(([k, v]) => `${v.name || k} (${k})`).join(", ")
+    : `${defaultName} (${defaultHubId})`;
+  api.logger.info(`[the-agents] Reporting to ${hubUrl} — agents: ${agentNames}${isGateway ? "" : " (agent mode — skipping heartbeat/registration)"}`);
+
+  if (isGateway && autoSpawn && autoSpawnAgents.length > 0) {
+    const WORKER_COOLDOWN_MS = 60_000; // 60s cooldown after completing a task
+    interface Worker { agentId: string; hubId: string; name: string; sprite: string; busy: boolean; completedAt: number; }
     const workers: Worker[] = autoSpawnAgents.map(id => {
       const ac = agentsConfig?.[id];
       return {
@@ -1042,6 +1048,7 @@ export default function register(api: any) {
         name: ac?.name || id,
         sprite: ac?.sprite || defaultSprite,
         busy: false,
+        completedAt: 0,
       };
     });
 
@@ -1076,7 +1083,8 @@ export default function register(api: any) {
     api.logger.info(`[the-agents] Auto-spawn: ${workers.map(w => w.name).join(", ")} — idle at "${workerIdleStation}", polling every ${autoSpawnInterval / 1000}s`);
 
     setInterval(async () => {
-      const freeWorker = workers.find(w => !w.busy);
+      const now = Date.now();
+      const freeWorker = workers.find(w => !w.busy && (now - w.completedAt) >= WORKER_COOLDOWN_MS);
       if (!freeWorker) return;
 
       try {
@@ -1130,6 +1138,7 @@ export default function register(api: any) {
             { cwd: process.cwd() },
             (err) => {
               freeWorker.busy = false;
+              freeWorker.completedAt = Date.now();
               // Return worker to idle station
               fetch(`${hubUrl}/api/state`, {
                 method: "POST", headers: authHeaders(),

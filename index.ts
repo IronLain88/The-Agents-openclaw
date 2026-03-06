@@ -1084,8 +1084,8 @@ export default function register(api: any) {
 
     setInterval(async () => {
       const now = Date.now();
-      const freeWorker = workers.find(w => !w.busy && (now - w.completedAt) >= WORKER_COOLDOWN_MS);
-      if (!freeWorker) return;
+      const freeWorkers = workers.filter(w => !w.busy && (now - w.completedAt) >= WORKER_COOLDOWN_MS);
+      if (freeWorkers.length === 0) return;
 
       try {
         const property = await fetchProperty();
@@ -1099,13 +1099,14 @@ export default function register(api: any) {
 
           if (state.status !== "pending" || state.claimedBy) continue;
 
-          // Respect assigned_to — skip if this worker isn't allowed
+          // Find a free worker that matches assigned_to (or any if unassigned)
           const assignedTo = (asset as any).assigned_to as string | undefined;
-          if (assignedTo) {
-            const match = freeWorker.name.toLowerCase().startsWith(assignedTo.toLowerCase())
-              || freeWorker.hubId.toLowerCase().startsWith(assignedTo.toLowerCase());
-            if (!match) continue;
-          }
+          const freeWorker = assignedTo
+            ? freeWorkers.find(w =>
+                w.name.toLowerCase().startsWith(assignedTo.toLowerCase())
+                || w.hubId.toLowerCase().startsWith(assignedTo.toLowerCase()))
+            : freeWorkers[0];
+          if (!freeWorker) continue;
 
           const claimRes = await fetch(`${hubUrl}/api/task/${encodeURIComponent(station)}/claim`, {
             method: "POST", headers: authHeaders(),

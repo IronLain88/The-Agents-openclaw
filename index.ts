@@ -1099,6 +1099,14 @@ export default function register(api: any) {
 
           if (state.status !== "pending" || state.claimedBy) continue;
 
+          // Respect assigned_to — skip if this worker isn't allowed
+          const assignedTo = (asset as any).assigned_to as string | undefined;
+          if (assignedTo) {
+            const match = freeWorker.name.toLowerCase().startsWith(assignedTo.toLowerCase())
+              || freeWorker.hubId.toLowerCase().startsWith(assignedTo.toLowerCase());
+            if (!match) continue;
+          }
+
           const claimRes = await fetch(`${hubUrl}/api/task/${encodeURIComponent(station)}/claim`, {
             method: "POST", headers: authHeaders(),
             body: JSON.stringify({ agent_id: freeWorker.hubId }),

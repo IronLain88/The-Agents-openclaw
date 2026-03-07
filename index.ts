@@ -4,6 +4,7 @@ import * as propertyTools from "./src/tools/property.js";
 import * as boardTools from "./src/tools/boards.js";
 import * as receptionTools from "./src/tools/reception.js";
 import * as taskTools from "./src/tools/tasks.js";
+import * as dtoTools from "./src/tools/dto.js";
 import { startAutoSpawn } from "./src/autospawn.js";
 
 function getGroup(state: string): string {
@@ -107,6 +108,7 @@ export default function register(api: any) {
   boardTools.register(ctx, api);
   receptionTools.register(ctx, api);
   taskTools.register(ctx, api);
+  dtoTools.register(ctx, api);
 
   // Gateway detection: first plugin load = gateway, spawned agents = subsequent loads
   const isGateway = !(globalThis as any).__theAgentsInitialized__;

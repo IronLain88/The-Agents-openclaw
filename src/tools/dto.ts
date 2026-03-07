@@ -78,13 +78,8 @@ export function register(ctx: Ctx, api: any): void {
         if (dtos.length === 0) return ctx.ok(`No DTOs waiting at "${station}"`);
 
         const dto = dtos[0];
-        const delRes = await fetch(`${ctx.hubUrl}/api/queue/${encodeURIComponent(station)}/${dto.id}`, {
-          method: "DELETE", headers: ctx.authHeaders(),
-        });
-        if (!delRes.ok) return ctx.ok(`Failed to consume DTO`);
-
         const trail = dto.trail.map((e: DtoTrailEntry) => `  - ${e.station} (${e.by}): ${e.data}`).join("\n");
-        return ctx.ok(`DTO ${dto.id} (type: ${dto.type})\nTrail:\n${trail}`);
+        return ctx.ok(`DTO ${dto.id} (type: ${dto.type}) at "${station}"\nTrail:\n${trail}\n\nCall forward_dto to move it to the next station, or delete it to end the pipeline.`);
       } catch (err) {
         return ctx.ok(`Failed: ${err}`);
       }

@@ -25,6 +25,7 @@ export interface AgentIdentity {
   state: string;
   detail: string;
   subscribedStation: string | null;
+  subscribedStations?: string[];
   signalWs: WebSocket | null;
   signalQueue: SignalMessage[];
   pendingResolve: ((msg: SignalMessage) => void) | null;

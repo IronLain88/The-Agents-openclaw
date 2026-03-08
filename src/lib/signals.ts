@@ -7,7 +7,8 @@ export function connectSignalWs(identity: AgentIdentity, hubUrl: string): void {
   identity.signalWs.on("message", (raw: WebSocket.RawData) => {
     try {
       const msg = JSON.parse(raw.toString());
-      if (msg.type === "signal" && msg.station === identity.subscribedStation) {
+      const stations = identity.subscribedStations || (identity.subscribedStation ? [identity.subscribedStation] : []);
+      if (msg.type === "signal" && stations.includes(msg.station)) {
         if (identity.pendingResolve) {
           const r = identity.pendingResolve; identity.pendingResolve = null; r(msg);
         } else {

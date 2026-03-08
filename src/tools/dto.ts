@@ -55,17 +55,20 @@ export function register(ctx: Ctx, api: any): void {
     name: "receive_dto",
     label: "Receive DTO",
     description:
-      "Receive (pop) the next DTO from a station queue. Returns the DTO with its full trail. " +
-      "After processing, call forward_dto to send it to the next station.",
+      "Receive the next DTO from a station queue. Returns the DTO with its full trail. " +
+      "After processing, call forward_dto to send it to the next station. " +
+      "Pass dto_id to target a specific DTO (e.g. from a signal payload).",
     parameters: {
       type: "object",
       properties: {
         station: { type: "string", description: "Station to receive from" },
+        dto_id: { type: "string", description: "Optional: specific DTO id to receive (from signal payload)" },
       },
       required: ["station"],
     },
     async execute(_id: string, params: Record<string, unknown>) {
       const station = params.station as string;
+      const dtoId = params.dto_id as string | undefined;
       try {
         const res = await fetch(`${ctx.hubUrl}/api/queue/${encodeURIComponent(station)}`, {
           headers: ctx.authHeaders(),
@@ -77,7 +80,7 @@ export function register(ctx: Ctx, api: any): void {
         const { dtos } = await res.json() as { dtos: Dto[] };
         if (dtos.length === 0) return ctx.ok(`No DTOs waiting at "${station}"`);
 
-        const dto = dtos[0];
+        const dto = dtoId ? dtos.find((d: Dto) => d.id === dtoId) || dtos[dtos.length - 1] : dtos[0];
         const trail = dto.trail.map((e: DtoTrailEntry) => `  - ${e.station} (${e.by}): ${e.data}`).join("\n");
         return ctx.ok(`DTO ${dto.id} (type: ${dto.type}) at "${station}"\nTrail:\n${trail}\n\nCall forward_dto to move it to the next station, or delete it to end the pipeline.`);
       } catch (err) {

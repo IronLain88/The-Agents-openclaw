@@ -9,6 +9,19 @@ function findAsset(assets: Asset[], query: string): Asset | undefined {
 
 export function register(ctx: Ctx, api: any): void {
   api.registerTool({
+    name: "sync_property",
+    label: "Sync Property",
+    description: "Refresh your local view of the property from the hub.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const p = await ctx.fetchProperty();
+        return ctx.ok(`Property synced (${(p.assets || []).length} assets)`);
+      } catch (err) { return ctx.ok(`Sync failed: ${err}`); }
+    },
+  });
+
+  api.registerTool({
     name: "get_village_info",
     label: "Get Village Info",
     description: "Get a summary of your property: available stations, signals, boards, and inbox.",
@@ -95,13 +108,16 @@ export function register(ctx: Ctx, api: any): void {
         approach: { type: "string", enum: ["above", "below", "left", "right"] },
         collision: { type: "boolean" },
         remote_url: { type: "string" }, remote_station: { type: "string" },
+        openclaw_task: { type: "boolean", description: "Mark as an OpenClaw auto-spawn task station" },
+        archive: { type: "boolean", description: "Mark as an archive station" },
+        welcome: { type: "boolean", description: "Mark as a welcome board" },
       },
       required: ["name"],
     },
     async execute(_id: string, params: Record<string, unknown>) {
       try {
         const body: Record<string, unknown> = { name: params.name };
-        for (const k of ["tileset", "tx", "ty", "x", "y", "station", "approach", "collision", "remote_url", "remote_station"])
+        for (const k of ["tileset", "tx", "ty", "x", "y", "station", "approach", "collision", "remote_url", "remote_station", "openclaw_task", "archive", "welcome"])
           if (params[k] !== undefined) body[k] = params[k];
         const res = await fetch(`${ctx.hubUrl}/api/assets`, { method: "POST", headers: ctx.authHeaders(), body: JSON.stringify(body) });
         if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ctx.ok(`Failed: ${(e as any).error}`); }

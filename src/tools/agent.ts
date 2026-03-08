@@ -1,6 +1,34 @@
 import WebSocket from "ws";
-import type { Ctx, SignalMessage, WelcomeData } from "../lib/types.js";
+import type { AgentIdentity, Ctx, SignalMessage, WelcomeData } from "../lib/types.js";
 import { connectSignalWs, formatSignalEvent } from "../lib/signals.js";
+
+async function tryClaimTask(station: string, identity: AgentIdentity, ctx: Ctx): Promise<string | null> {
+  try {
+    const p = await ctx.fetchProperty();
+    const asset = (p.assets || []).find((a: any) => a.station === station && a.task);
+    if (!asset) return null;
+    let state = { status: "idle" } as Record<string, unknown>;
+    try { if (asset.content?.data) state = JSON.parse(asset.content.data); } catch {}
+    if (state.status !== "pending") return null;
+
+    const res = await fetch(`${ctx.hubUrl}/api/task/${encodeURIComponent(station)}/claim`, {
+      method: "POST", headers: ctx.authHeaders(),
+      body: JSON.stringify({ agent_id: identity.name }),
+    });
+    if (!res.ok) return null;
+    const { instructions, prompt } = await res.json() as { instructions?: string; prompt?: string; ok: boolean };
+
+    const parts: string[] = [`# Task: ${station}\n`];
+    if (instructions) parts.push(`## Instructions\n${instructions}\n`);
+    if (prompt) parts.push(`## Visitor's request\n${prompt}\n`);
+    parts.push(`## Required steps`);
+    parts.push(`1. Call update_state before EVERY step`);
+    parts.push(`2. Do the work described above`);
+    parts.push(`3. Call answer_task("${station}", "<h2>Result</h2><p>your result</p>")`);
+    parts.push(`4. Then call check_events() again to wait for the next task`);
+    return parts.join("\n");
+  } catch { return null; }
+}
 
 export function formatWelcome(w: WelcomeData): string {
   const lines: string[] = ["## Welcome to your property\n"];
@@ -98,23 +126,59 @@ export function register(ctx: Ctx, api: any): void {
     (tool: any) => {
       const identity = ctx.getIdentity(tool?.agentId);
       return {
-        name: "subscribe",
-        label: "Subscribe to Signal",
-        description: "Subscribe to a signal or task station. For tasks: subscribe -> check_events (returns instructions) -> do work -> answer_task.",
+        name: "say",
+        label: "Say",
+        description: "Update your speech bubble without changing state or moving. Use for status messages, thoughts, or progress updates while staying at your current station.",
         parameters: {
           type: "object",
-          properties: { name: { type: "string", description: "Signal station name" } },
-          required: ["name"],
+          properties: { message: { type: "string", description: 'What to say, e.g. "Almost done..." or "Found 3 results"' } },
+          required: ["message"],
+        },
+        async execute(_id: string, params: Record<string, unknown>) {
+          await ctx.reportToHub(identity.state || "idle", params.message as string, identity);
+          return ctx.ok(`Said: "${params.message}"`);
+        },
+      };
+    },
+    { names: ["say"] }
+  );
+
+  api.registerTool(
+    (tool: any) => {
+      const identity = ctx.getIdentity(tool?.agentId);
+      return {
+        name: "subscribe",
+        label: "Subscribe",
+        description: "Subscribe to station(s). With no name: subscribes to ALL task stations. With a name: subscribes to that specific signal or task station. Then call check_events() in a loop.",
+        parameters: {
+          type: "object",
+          properties: { name: { type: "string", description: "Station name, or omit to subscribe to all your task stations" } },
         },
         async execute(_id: string, params: Record<string, unknown>) {
           try {
             const p = await ctx.fetchProperty();
-            const asset = (p.assets || []).find(a => a.station === (params.name as string) && a.trigger);
-            if (!asset) return ctx.ok(`No signal named "${params.name}" found`);
-            identity.subscribedStation = params.name as string;
+            const name = params.name as string | undefined;
+
+            if (!name) {
+              const taskStations = (p.assets || []).filter((a: any) => a.task && !a.openclaw_task);
+              if (taskStations.length === 0) return ctx.ok("No task stations available on this property.");
+              identity.subscribedStations = taskStations.map(a => a.station!).filter(Boolean);
+              identity.subscribedStation = identity.subscribedStations[0];
+              if (!identity.signalWs || identity.signalWs.readyState !== WebSocket.OPEN) connectSignalWs(identity, ctx.hubUrl);
+              return ctx.ok(`Subscribed to ${identity.subscribedStations.length} task station(s): ${identity.subscribedStations.join(", ")}. Call check_events() to wait for work.`);
+            }
+
+            const asset = (p.assets || []).find(a => a.station === name && (a.trigger || (a as any).task));
+            if (!asset) return ctx.ok(`No signal or task station "${name}" found`);
+            identity.subscribedStation = name;
+            identity.subscribedStations = [name];
             if (!identity.signalWs || identity.signalWs.readyState !== WebSocket.OPEN) connectSignalWs(identity, ctx.hubUrl);
-            await ctx.reportToHub(identity.subscribedStation, `Listening for ${asset.trigger} signal`, identity);
-            return ctx.ok(`Subscribed to "${params.name}" (${asset.trigger} every ${asset.trigger_interval || 1} min)`);
+            if ((asset as any).task) {
+              await ctx.reportToHub(name, `On duty at ${name}`, identity);
+              return ctx.ok(`Subscribed to task station "${name}". Call check_events() to wait for work.`);
+            }
+            await ctx.reportToHub(name, `Listening for ${asset.trigger} signal`, identity);
+            return ctx.ok(`Subscribed to "${name}" (${asset.trigger} every ${asset.trigger_interval || 1} min)`);
           } catch (err) { return ctx.ok(`Subscribe failed: ${err}`); }
         },
       };
@@ -128,12 +192,21 @@ export function register(ctx: Ctx, api: any): void {
       return {
         name: "check_events",
         label: "Check Events",
-        description: "Wait for the next event on your subscribed station (up to 10 min). For tasks, the event payload contains instructions.",
+        description: "Wait for the next event on your subscribed station(s) (up to 10 min). For task stations, automatically claims the task and returns instructions. Call subscribe first.",
         parameters: { type: "object", properties: {} },
         async execute() {
           if (!identity.subscribedStation) return ctx.ok("Not subscribed. Call subscribe first.");
           if (!identity.signalWs || identity.signalWs.readyState !== WebSocket.OPEN) connectSignalWs(identity, ctx.hubUrl);
-          const keepAlive = setInterval(() => ctx.reportToHub(identity.subscribedStation!, "Listening for signal", identity), 120_000);
+
+          // Check for already-pending tasks on all subscribed stations
+          const stations = identity.subscribedStations || [identity.subscribedStation];
+          for (const station of stations) {
+            const claimed = await tryClaimTask(station, identity, ctx);
+            if (claimed) return ctx.ok(claimed);
+          }
+
+          const waitMsg = stations.length > 1 ? `On duty (${stations.length} stations)` : `Waiting at ${stations[0]}`;
+          const keepAlive = setInterval(() => ctx.reportToHub(stations[0], waitMsg, identity), 120_000);
           try {
             let event: string;
             if (identity.signalQueue.length > 0) {
@@ -145,17 +218,15 @@ export function register(ctx: Ctx, api: any): void {
               });
               event = formatSignalEvent(msg, identity);
             }
-            const inboxRes = await fetch(`${ctx.hubUrl}/api/board/inbox`, { headers: ctx.authHeaders() }).catch(() => null);
-            if (inboxRes?.ok) {
-              const board = await inboxRes.json() as any;
-              try {
-                const msgs = board?.content?.data ? JSON.parse(board.content.data) : [];
-                if (Array.isArray(msgs) && msgs.length > 0)
-                  event += `\n\nYou have ${msgs.length} unread message${msgs.length > 1 ? "s" : ""}. Call check_inbox to read them.`;
-              } catch {}
+
+            // After signal, try to claim any pending task
+            for (const station of stations) {
+              const claimed = await tryClaimTask(station, identity, ctx);
+              if (claimed) return ctx.ok(claimed);
             }
+
             return ctx.ok(event + "\n\nRemember to call update_state for your next activity.");
-          } catch { return ctx.ok("No events (timeout). Remember to call update_state for your next activity."); }
+          } catch { return ctx.ok("No events (timeout). Call check_events() again to keep waiting."); }
           finally { clearInterval(keepAlive); }
         },
       };
@@ -175,15 +246,18 @@ export function register(ctx: Ctx, api: any): void {
           properties: {
             text: { type: "string", description: "Message text" },
             inbox: { type: "string", description: "Target inbox name (default: inbox)." },
+            mood: { type: "string", description: 'Optional mood/vibe for the message (e.g. "caffeinated", "triumphant")' },
           },
           required: ["text"],
         },
         async execute(_id: string, params: Record<string, unknown>) {
           const target = (params.inbox as string) || "inbox";
           try {
+            const body: Record<string, string> = { from: identity.name, text: params.text as string };
+            if (params.mood) body.mood = params.mood as string;
             const res = await fetch(`${ctx.hubUrl}/api/inbox/${encodeURIComponent(target)}`, {
               method: "POST", headers: ctx.authHeaders(),
-              body: JSON.stringify({ from: identity.name, text: params.text }),
+              body: JSON.stringify(body),
             });
             if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ctx.ok(`Send failed: ${(e as any).error}`); }
             const { count } = await res.json() as { count: number };

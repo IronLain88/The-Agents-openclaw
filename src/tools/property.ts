@@ -36,8 +36,8 @@ export function register(ctx: Ctx, api: any): void {
       try {
         const p = await ctx.fetchProperty();
         const assets = p.assets || [];
-        const stations: string[] = [], signals: string[] = [], tasks: string[] = [], openclawTasks: string[] = [], boards: string[] = [];
-        let inboxCount = 0;
+        const queues = (p as any).queues || {};
+        const stations: string[] = [], signals: string[] = [], tasks: string[] = [], openclawTasks: string[] = [];
         for (const a of assets) {
           if (!a.station) continue;
           if ((a as any).task) {
@@ -47,14 +47,11 @@ export function register(ctx: Ctx, api: any): void {
           }
           if (a.trigger) {
             signals.push(`${a.name || a.station} (${a.trigger}, every ${a.trigger_interval || 1} min)`);
-          } else if (a.station === "inbox" && a.content?.data) {
-            try { const msgs = JSON.parse(a.content.data); if (Array.isArray(msgs)) inboxCount += msgs.length; } catch {}
+          } else if (!(a as any).welcome && !(a as any).archive) {
             if (!stations.includes(a.station)) stations.push(a.station);
-          } else {
-            if (!stations.includes(a.station)) stations.push(a.station);
-            if (a.content?.data) boards.push(a.name || a.station || "");
           }
         }
+        const inboxCount = (queues.inbox || []).length;
         lines.push("## Your Property");
         lines.push(`**Stations:** ${stations.join(", ") || "none"}`);
         if (inboxCount > 0) lines.push(`**Inbox:** ${inboxCount} message(s)`);
@@ -68,7 +65,6 @@ export function register(ctx: Ctx, api: any): void {
           for (const t of openclawTasks) lines.push(`  - ${t}`);
         }
         if (signals.length > 0) lines.push(`**Signals:** ${signals.join(", ")}`);
-        if (boards.length > 0) lines.push(`**Boards with content:** ${boards.join(", ")}`);
         lines.push(`**Total assets:** ${assets.length}`);
       } catch { lines.push("*(Could not fetch property)*"); }
       return ctx.ok(lines.join("\n"));

@@ -34,7 +34,6 @@ export interface AgentIdentity {
 export interface WelcomeData {
   stations: string[];
   signals: string[];
-  boards: string[];
   tasks: string[];
   inbox: number;
   agents: { name: string; state: string }[];

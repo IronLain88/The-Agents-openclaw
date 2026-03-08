@@ -41,7 +41,6 @@ export function formatWelcome(w: WelcomeData): string {
     lines.push(`*Workflow: work_task({station}) -> do work (call update_state at each step!) -> answer_task({station, result}) -> work_task again*`);
   }
   if (w.signals.length > 0) lines.push(`**Signals:** ${w.signals.join(", ")}`);
-  if (w.boards.length > 0) lines.push(`**Boards with content:** ${w.boards.join(", ")}`);
   return lines.join("\n");
 }
 
@@ -246,18 +245,15 @@ export function register(ctx: Ctx, api: any): void {
           properties: {
             text: { type: "string", description: "Message text" },
             inbox: { type: "string", description: "Target inbox name (default: inbox)." },
-            mood: { type: "string", description: 'Optional mood/vibe for the message (e.g. "caffeinated", "triumphant")' },
           },
           required: ["text"],
         },
         async execute(_id: string, params: Record<string, unknown>) {
           const target = (params.inbox as string) || "inbox";
           try {
-            const body: Record<string, string> = { from: identity.name, text: params.text as string };
-            if (params.mood) body.mood = params.mood as string;
-            const res = await fetch(`${ctx.hubUrl}/api/inbox/${encodeURIComponent(target)}`, {
+            const res = await fetch(`${ctx.hubUrl}/api/queue/${encodeURIComponent(target)}`, {
               method: "POST", headers: ctx.authHeaders(),
-              body: JSON.stringify(body),
+              body: JSON.stringify({ by: identity.name, data: params.text as string }),
             });
             if (!res.ok) { const e = await res.json().catch(() => ({ error: res.statusText })); return ctx.ok(`Send failed: ${(e as any).error}`); }
             const { count } = await res.json() as { count: number };

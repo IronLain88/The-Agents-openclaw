@@ -10,7 +10,7 @@ export function register(ctx: Ctx, api: any): void {
       properties: {
         station: { type: "string" },
         data: { type: "string", description: "Content to post (max 10KB)" },
-        type: { type: "string", enum: ["text", "markdown", "json"] },
+        type: { type: "string", enum: ["text", "markdown", "json", "html"] },
       },
       required: ["station", "data"],
     },

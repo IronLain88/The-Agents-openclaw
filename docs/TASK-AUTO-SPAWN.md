@@ -23,7 +23,7 @@ When a visitor clicks "Run" on an `openclaw_task` station:
       "ownerName": "My Name",
       "agents": {
         "lain": { "name": "Lain", "sprite": "Yuki" },
-        "worker-a": { "name": "Aeon", "sprite": "aeon" },
+        "worker-a": { "name": "Kael", "sprite": "Kael" },
         "worker-b": { "name": "Rei", "sprite": "rei" }
       },
       "autoSpawn": true,

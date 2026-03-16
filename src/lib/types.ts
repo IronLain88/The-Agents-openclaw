@@ -35,6 +35,7 @@ export interface WelcomeData {
   stations: string[];
   signals: string[];
   tasks: string[];
+  boards?: string[];
   inbox: number;
   agents: { name: string; state: string }[];
 }

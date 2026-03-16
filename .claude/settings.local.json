@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__agent-visualizer__update_state",
+      "WebFetch(domain:x.com)",
+      "mcp__agent-visualizer__update_subagent_state",
+      "WebFetch(domain:the-agents.net)",
+      "Bash(gh pr:*)",
+      "Bash(docker build:*)",
+      "Bash(docker push:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker exec:*)",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec:*)",
+      "Bash(MSYS_NO_PATHCONV=1 docker inspect:*)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(python3:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.openclaw.ai)",
+      "WebFetch(domain:github.com)",
+      "Bash(npx tsc:*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "agent-visualizer"
+  ]
+}

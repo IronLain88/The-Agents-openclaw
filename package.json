@@ -1,6 +1,7 @@
 {
   "name": "the-agents-openclaw",
-  "version": "0.3.0",
+  "version": "1.0.0",
+  "author": "zero.liquid88@gmail.com",
   "description": "OpenClaw plugin for The Agents — real-time AI agent visualization",
   "main": "index.ts",
   "openclaw": {
@@ -9,6 +10,7 @@
     }
   },
   "keywords": [
+    "the-agents",
     "openclaw",
     "openclaw-plugin",
     "ai-agents",

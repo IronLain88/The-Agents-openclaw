@@ -41,6 +41,7 @@ export function formatWelcome(w: WelcomeData): string {
     lines.push(`*Workflow: work_task({station}) -> do work (call update_state at each step!) -> answer_task({station, result}) -> work_task again*`);
   }
   if (w.signals.length > 0) lines.push(`**Signals:** ${w.signals.join(", ")}`);
+  if (w.boards?.length) lines.push(`**Boards:** ${w.boards.join(", ")}`);
   return lines.join("\n");
 }
 

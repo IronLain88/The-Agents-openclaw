@@ -87,15 +87,19 @@ Each agent gets its own pixel character, signal subscriptions, and board access.
 | `ownerId` | `default` | Property owner ID |
 | `ownerName` | `Default` | Property owner display name |
 | `agents` | *(none)* | Per-agent identity map (see Multi-Agent Setup) |
+| `autoSpawn` | `false` | Auto-spawn agents for pending task stations |
+| `autoSpawnAgents` | *(none)* | List of OpenClaw agent IDs available as task workers |
+| `autoSpawnInterval` | `15` | Polling interval in seconds for pending tasks |
+| `workerIdleStation` | `idle` | Station where idle workers sit |
 
 ## Tools
 
-Same tools as the MCP server — full parity:
-
-**State:** `update_state`, `update_subagent_state`, `set_name`, `get_village_info`, `get_status`
-**Assets:** `list_assets`, `add_asset`, `remove_asset`, `move_asset`, `attach_content`, `read_asset_content`, `sync_property`
-**Boards:** `post_to_board`, `read_board`
+**State:** `update_state`, `update_subagent_state`, `set_name`, `say`, `get_village_info`, `get_status`
+**Assets:** `list_assets`, `add_asset`, `remove_asset`, `sync_property`
 **Inboxes:** `send_message`, `check_inbox`, `clear_inbox`
+**DTOs:** `create_dto`, `receive_dto`, `forward_dto`
+**Tasks:** `read_task`, `work_task`, `answer_task`
+**Reception:** `read_reception`, `answer_reception`
 **Signals:** `subscribe`, `check_events`, `fire_signal`
 
 ## Related
